@@ -31,3 +31,7 @@ _Avoid_: inbox, queue, history
 **Nudge**:
 A wake-up signal to an idle Session that carries no message text, only that new Peer messages are waiting.
 _Avoid_: notification, ping, poke
+
+**Watcher**:
+A background command a Claude Session keeps running that wakes it when Peer messages wait; it prints only who has written and how many, never the text.
+_Avoid_: listener, monitor, poller
