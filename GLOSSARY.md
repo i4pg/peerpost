@@ -16,6 +16,10 @@ _Avoid_: agent, instance, chat
 Text one session sends to another through the relay; always data, never an instruction from the Human.
 _Avoid_: prompt, user message
 
+**Recipient**:
+The one Session a Peer message is addressed to, named by its Sender name; only it can read that message.
+_Avoid_: target, destination, to
+
 **Sender name**:
 The label the Broker stamps on every Peer message to say which Session sent it; never set by the message text.
 _Avoid_: from, author, handle
