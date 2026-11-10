@@ -1,6 +1,6 @@
-# Codex–Claude relay
+# peerpost
 
-Lets Codex CLI sessions and Claude Code sessions on one computer exchange messages both ways, without a peer's words ever passing as the human's own input or approval.
+A local message relay that lets Codex CLI sessions and Claude Code sessions on one computer exchange messages both ways, without a peer's words ever passing as the human's own input or approval.
 
 ## Language
 
