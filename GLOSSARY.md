@@ -29,7 +29,7 @@ The one local process that receives, stores and hands out Peer messages.
 _Avoid_: server, hub, daemon
 
 **Message log**:
-The append-only record of every Peer message the Broker has accepted.
+The append-only record of the newest Peer messages the Broker has accepted; the oldest are dropped past a set count.
 _Avoid_: inbox, queue, history
 
 **Nudge**:
