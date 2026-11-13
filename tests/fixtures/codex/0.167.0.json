@@ -1,0 +1,15 @@
+{
+  "codexVersion": "0.167.0",
+  "source": "openai/codex tag rust-v0.167.0, codex-rs/core/src/mcp_tool_call.rs lines 572-577: every MCP tools/call Codex sends carries _meta.threadId (the thread's UUIDv7) and _meta.sessionId. Defined in source only, not in Codex's docs (ADR 0006). Read from the source on 2026-11-10.",
+  "toolCall": {
+    "method": "tools/call",
+    "params": {
+      "name": "who",
+      "arguments": {},
+      "_meta": {
+        "threadId": "01a1bd10-5eed-7bc2-b4a2-7639558b99cf",
+        "sessionId": "01a1bd10-5eed-7bc2-b4a2-7639558b99cf"
+      }
+    }
+  }
+}
