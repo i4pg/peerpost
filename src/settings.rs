@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 /// Overrides the per-user runtime directory (Broker socket, broker log).
 pub const ENV_RUNTIME_DIR: &str = "PEERPOST_RUNTIME_DIR";
@@ -16,6 +16,10 @@ pub const ENV_DATA_DIR: &str = "PEERPOST_DATA_DIR";
 pub const ENV_GRACE_MS: &str = "PEERPOST_GRACE_MS";
 
 const DEFAULT_GRACE: Duration = Duration::from_secs(30);
+/// How many Peer messages the Message log keeps; older ones are dropped.
+pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
+/// The default for [`ENV_LOG_KEEP`].
+pub const DEFAULT_LOG_KEEP: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -23,21 +27,23 @@ pub struct Settings {
     pub data_dir: PathBuf,
     /// The Broker exits once no client has been connected for this long.
     pub grace: Duration,
+    /// The Message log keeps only this many newest Peer messages (at least 1).
+    pub log_keep: usize,
 }
 
 impl Settings {
     pub fn from_env() -> Result<Self> {
-        Ok(Self { runtime_dir: runtime_dir()?, data_dir: data_dir()?, grace: grace()? })
+        Ok(Self { runtime_dir: runtime_dir()?, data_dir: data_dir()?, grace: grace()?, log_keep: log_keep()? })
     }
 
     pub fn socket_path(&self) -> PathBuf {
         self.runtime_dir.join("broker.sock")
     }
 
-    /// Held (flock) by the running Broker for its whole life; it holds the
-    /// Broker's process id for the Human's benefit.
-    pub fn broker_lock_path(&self) -> PathBuf {
-        self.runtime_dir.join("broker.lock")
+    /// Held (flock) by the running Broker for its whole life: one guards the
+    /// socket, the other the Message log.
+    pub fn broker_lock_paths(&self) -> [PathBuf; 2] {
+        [self.runtime_dir.join("broker.lock"), self.data_dir.join("broker.lock")]
     }
 
     /// Held (flock) by a client while it starts a Broker, so clients that
@@ -55,13 +61,20 @@ impl Settings {
     }
 }
 
+/// The grace period must outlast a client's own start of the Broker, or the
+/// Broker could stop before the client that started it connects.
+const MIN_GRACE: Duration = Duration::from_millis(100);
+
 fn grace() -> Result<Duration> {
-    match std::env::var(ENV_GRACE_MS) {
-        Ok(v) if !v.is_empty() => v
-            .parse::<u64>()
-            .map(Duration::from_millis)
-            .with_context(|| format!("{ENV_GRACE_MS} must be a whole number of milliseconds, got `{v}`")),
-        _ => Ok(DEFAULT_GRACE),
+    let Some(v) = std::env::var(ENV_GRACE_MS).ok().filter(|v| !v.is_empty()) else {
+        return Ok(DEFAULT_GRACE);
+    };
+    match v.parse::<u64>().map(Duration::from_millis) {
+        Ok(grace) if grace >= MIN_GRACE => Ok(grace),
+        _ => bail!(
+            "{ENV_GRACE_MS} must be a whole number of milliseconds, at least {}, got `{v}`",
+            MIN_GRACE.as_millis()
+        ),
     }
 }
 
@@ -92,4 +105,16 @@ fn data_dir() -> Result<PathBuf> {
     }
     let home = env_path("HOME").context("cannot find a data directory: set HOME or PEERPOST_DATA_DIR")?;
     Ok(home.join(".local").join("share").join("peerpost"))
+}
+
+/// `$PEERPOST_LOG_KEEP`, else [`DEFAULT_LOG_KEEP`]; must be a whole number of
+/// at least 1.
+fn log_keep() -> Result<usize> {
+    let Some(raw) = std::env::var_os(ENV_LOG_KEEP).filter(|v| !v.is_empty()) else {
+        return Ok(DEFAULT_LOG_KEEP);
+    };
+    match raw.to_str().and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(n) if n >= 1 => Ok(n),
+        _ => anyhow::bail!("{ENV_LOG_KEEP} must be a whole number of at least 1, got {raw:?}"),
+    }
 }

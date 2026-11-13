@@ -49,6 +49,19 @@ pub fn open_append(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// Create `path` (or empty an existing one) for writing, with mode 0600.
+pub fn create_truncate(path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
 /// Open `path` (created 0600) and take an exclusive `flock` on it, retrying
 /// for up to `wait`. `None` if another process still holds it. The lock goes
 /// with the returned `File`, and the kernel drops it when its holder dies, so

@@ -17,14 +17,15 @@ use tokio::process::Command;
 /// Environment variables a test may set on a spawned peerpost process.
 /// Everything from the outer environment that could change peerpost's
 /// behaviour is removed first, so tests are hermetic.
-const SCRUBBED_VARS: &[&str] = &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_GRACE_MS"];
+const SCRUBBED_VARS: &[&str] =
+    &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_LOG_KEEP", "PEERPOST_GRACE_MS"];
 
 /// A private runtime and data directory; every Session and Broker started
 /// from one `TestEnv` shares them. Dropping it removes both, which also makes
 /// the Broker exit.
 pub struct TestEnv {
     root: TempDir,
-    /// Extra variables set on every peerpost process this env starts.
+    /// Extra variables set on every command, after the scrub.
     vars: Vec<(String, String)>,
 }
 
@@ -33,9 +34,10 @@ impl TestEnv {
         Self { root: tempfile::Builder::new().prefix("pp").tempdir().expect("tempdir"), vars: Vec::new() }
     }
 
-    /// Set `var` on every peerpost process this env starts from now on.
-    pub fn set_env(&mut self, var: &str, value: &str) {
-        self.vars.push((var.to_string(), value.to_string()));
+    /// Set `name=value` on every peerpost process this env starts from now
+    /// on (Broker included, as it inherits the starting process's env).
+    pub fn set_var(&mut self, name: &str, value: &str) {
+        self.vars.push((name.into(), value.into()));
     }
 
     /// Process ids of the live Brokers using this env's runtime directory
@@ -77,10 +79,40 @@ impl TestEnv {
         }
         cmd.env("PEERPOST_RUNTIME_DIR", self.runtime_dir());
         cmd.env("PEERPOST_DATA_DIR", self.data_dir());
-        for (var, value) in &self.vars {
-            cmd.env(var, value);
+        for (name, value) in &self.vars {
+            cmd.env(name, value);
         }
         cmd
+    }
+
+    /// Run `peerpost <args>` to completion and return its output.
+    pub async fn run(&self, args: &[&str]) -> std::process::Output {
+        let mut cmd = self.command();
+        cmd.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+            .await
+            .expect("peerpost command timed out")
+            .expect("run peerpost")
+    }
+
+    /// The Message log file, as the README names it.
+    pub fn message_log(&self) -> PathBuf {
+        self.data_dir().join("messages.jsonl")
+    }
+
+    /// Start a Broker by hand, so the test can stop it.
+    pub async fn start_broker(&self) -> tokio::process::Child {
+        let mut cmd = self.command();
+        cmd.arg("broker").stdin(std::process::Stdio::null()).kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn broker");
+        let socket = self.runtime_dir().join("broker.sock");
+        for _ in 0..200 {
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                return child;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("the Broker did not answer on {}", socket.display());
     }
 
     /// Start a Claude Session's MCP server (`CLAUDECODE=1`), optionally with

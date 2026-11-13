@@ -16,8 +16,11 @@ use crate::settings::Settings;
 /// How long a client waits for a Broker it started to answer.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const START_POLL: Duration = Duration::from_millis(25);
-
-type Conn = (Lines<BufReader<OwnedReadHalf>>, OwnedWriteHalf);
+/// How long a client waits for another client that is starting the Broker:
+/// longer than that client's own wait, so the queue never gives up first.
+const START_LOCK_WAIT: Duration = Duration::from_secs(10);
+/// How many Brokers a request that is safe to repeat tries before giving up.
+const ATTEMPTS: usize = 3;
 
 pub struct BrokerClient {
     settings: Settings,
@@ -28,116 +31,165 @@ pub struct BrokerClient {
 struct Inner {
     /// `None` after the Broker went away, until the next request reconnects.
     conn: Option<Conn>,
-    /// Sessions registered through this client, registered again on every
-    /// reconnect so a restarted Broker knows them.
-    sessions: Vec<String>,
+    /// Registrations made through this client, made again on every reconnect
+    /// so a new Broker knows the same Sessions under the same Sender names.
+    registrations: Vec<Request>,
 }
 
 impl BrokerClient {
     /// Connect to the running Broker, or start one in the background and
     /// wait until it answers.
     pub async fn connect_or_start(settings: &Settings) -> Result<Self> {
-        let conn = connect_or_start(settings).await?;
-        Ok(Self { settings: settings.clone(), inner: Mutex::new(Inner { conn: Some(conn), sessions: Vec::new() }) })
+        let conn = Conn::open(settings).await?;
+        Ok(Self {
+            settings: settings.clone(),
+            inner: Mutex::new(Inner { conn: Some(conn), registrations: Vec::new() }),
+        })
     }
 
     /// Send one request; `Err` carries the Broker's error text (meant for the
     /// calling model) or a transport failure.
     ///
     /// If the Broker has gone away (it stopped, crashed, or lost a start
-    /// race), this connects to, or starts, a new one, registers this client's
-    /// Sessions again and retries the request once. A request the old Broker
-    /// handled just before it died may therefore be handled twice.
+    /// race), this connects to a new one, starting it if need be, and
+    /// registers this client's Sessions again first. A request that went out
+    /// and got no reply is repeated only if repeating it is harmless (not
+    /// `send` or `read`, which could duplicate or lose a Peer message).
     pub async fn request(&self, request: &Request) -> Result<Reply, String> {
         let mut inner = self.inner.lock().await;
-        let reply = match inner.conn.as_mut() {
-            Some(conn) => exchange(conn, request).await,
-            None => Err(Lost("not connected".into())),
-        };
-        let reply = match reply {
-            Ok(reply) => reply,
-            Err(Lost(why)) => {
-                inner.conn = None;
-                let conn =
-                    self.reconnect(&inner.sessions).await.map_err(|e| format!("lost the Broker ({why}): {e}"))?;
-                let conn = inner.conn.insert(conn);
-                exchange(conn, request).await.map_err(|Lost(e)| format!("lost the Broker: {e}"))?
-            }
-        };
-        match reply {
-            Response::Ok { ok } => {
-                if let Request::Register { session } = request {
-                    inner.sessions.push(session.clone());
+        let mut lost = String::new();
+        for _ in 0..ATTEMPTS {
+            let inner = &mut *inner;
+            let conn = match inner.conn.take().and_then(|mut c| (!c.is_closed()).then_some(c)) {
+                Some(conn) => conn,
+                None => {
+                    let (conn, refused) =
+                        self.reconnect(&mut inner.registrations).await.map_err(|e| format!("lost the Broker: {e}"))?;
+                    if let Some(error) = refused {
+                        inner.conn = Some(conn);
+                        return Err(error);
+                    }
+                    conn
                 }
-                Ok(ok)
-            }
-            Response::Err { error } => Err(error),
-        }
-    }
-
-    async fn reconnect(&self, sessions: &[String]) -> Result<Conn, String> {
-        let mut conn = connect_or_start(&self.settings).await.map_err(|e| format!("{e:#}"))?;
-        for session in sessions {
-            let register = Request::Register { session: session.clone() };
-            match exchange(&mut conn, &register).await.map_err(|Lost(e)| e)? {
-                Response::Ok { .. } => {}
-                Response::Err { error } => return Err(format!("could not register `{session}` again: {error}")),
-            }
-        }
-        Ok(conn)
-    }
-}
-
-/// The connection broke before a whole reply came back.
-struct Lost(String);
-
-/// Write one request line and read one response line.
-async fn exchange(conn: &mut Conn, request: &Request) -> Result<Response, Lost> {
-    let (lines, writer) = conn;
-    let mut line = serde_json::to_string(request).expect("requests always serialize");
-    line.push('\n');
-    writer.write_all(line.as_bytes()).await.map_err(|e| Lost(e.to_string()))?;
-    let reply =
-        lines.next_line().await.map_err(|e| Lost(e.to_string()))?.ok_or_else(|| Lost("connection closed".into()))?;
-    serde_json::from_str::<Response>(&reply).map_err(|e| Lost(format!("bad Broker reply: {e}")))
-}
-
-/// Connect to the running Broker, or start one and wait until it answers.
-/// Clients that find no Broker at the same moment queue on the start lock,
-/// and all but the first find the first one's Broker answering.
-async fn connect_or_start(settings: &Settings) -> Result<Conn> {
-    let stream = match UnixStream::connect(settings.socket_path()).await {
-        Ok(stream) => stream,
-        Err(_) => {
-            private_fs::ensure_dir(&settings.runtime_dir)?;
-            let lock_path = settings.start_lock_path();
-            let start_lock = tokio::task::spawn_blocking(move || private_fs::lock_file(&lock_path, START_TIMEOUT))
-                .await
-                .context("start lock task failed")??;
-            if start_lock.is_none() {
-                bail!(
-                    "another client has been starting the Broker for too long ({})",
-                    settings.start_lock_path().display()
-                );
-            }
-            match UnixStream::connect(settings.socket_path()).await {
-                Ok(stream) => stream,
-                Err(_) => {
-                    start_broker(settings)?;
-                    wait_for_broker(settings).await?
+            };
+            match inner.conn.insert(conn).exchange(request).await {
+                Ok(Response::Ok { ok }) => {
+                    if let Request::Register { .. } = request {
+                        inner.registrations.push(request.clone());
+                    }
+                    return Ok(ok);
+                }
+                Ok(Response::Err { error }) => return Err(error),
+                Err(Failure::BadReply(e)) => return Err(format!("bad Broker reply: {e}")),
+                Err(Failure::Lost(e)) => {
+                    inner.conn = None;
+                    if matches!(request, Request::Send { .. } | Request::Read { .. }) {
+                        return Err(format!(
+                            "lost the Broker during this call ({e}); it may or may not have been handled, \
+                             so it was not repeated; the next call reconnects"
+                        ));
+                    }
+                    lost = e;
                 }
             }
         }
-    };
-    let (r, w) = stream.into_split();
-    Ok((BufReader::new(r).lines(), w))
+        Err(format!("lost the Broker: {lost}"))
+    }
+
+    /// Open a connection and register `registrations` on it again. A Sender
+    /// name a new Session took in the meantime is dropped from the list and
+    /// reported alongside the connection.
+    async fn reconnect(&self, registrations: &mut Vec<Request>) -> Result<(Conn, Option<String>), String> {
+        let mut conn = Conn::open(&self.settings).await.map_err(|e| format!("{e:#}"))?;
+        let mut refused = Vec::new();
+        let mut kept = Vec::new();
+        for register in registrations.drain(..) {
+            match conn.exchange(&register).await {
+                Ok(Response::Ok { .. }) => kept.push(register),
+                Ok(Response::Err { error }) => refused.push(error),
+                Err(Failure::Lost(e) | Failure::BadReply(e)) => return Err(e),
+            }
+        }
+        *registrations = kept;
+        let refused = (!refused.is_empty())
+            .then(|| format!("the Broker restarted and refused a Session this client had: {}", refused.join("; ")));
+        Ok((conn, refused))
+    }
+}
+
+/// Why a request got no usable reply.
+enum Failure {
+    /// The connection broke; the Broker may or may not have handled it.
+    Lost(String),
+    /// A reply came back but was not a protocol response.
+    BadReply(String),
+}
+
+/// One open connection to a Broker.
+struct Conn {
+    lines: Lines<BufReader<OwnedReadHalf>>,
+    writer: OwnedWriteHalf,
+}
+
+impl Conn {
+    /// Connect to the running Broker, or start one and wait until it
+    /// answers. Clients that find no Broker at the same moment queue on the
+    /// start lock, and all but the first find the first one's Broker
+    /// answering.
+    async fn open(settings: &Settings) -> Result<Conn> {
+        let stream = match UnixStream::connect(settings.socket_path()).await {
+            Ok(stream) => stream,
+            Err(_) => {
+                private_fs::ensure_dir(&settings.runtime_dir)?;
+                let lock_path = settings.start_lock_path();
+                let _start_lock =
+                    tokio::task::spawn_blocking(move || private_fs::lock_file(&lock_path, START_LOCK_WAIT))
+                        .await
+                        .context("start lock task failed")??
+                        .context("another client has been starting the Broker for too long")?;
+                match UnixStream::connect(settings.socket_path()).await {
+                    Ok(stream) => stream,
+                    Err(_) => {
+                        start_broker(settings)?;
+                        wait_for_broker(settings).await?
+                    }
+                }
+            }
+        };
+        let (r, w) = stream.into_split();
+        Ok(Conn { lines: BufReader::new(r).lines(), writer: w })
+    }
+
+    /// Whether the Broker has already closed this idle connection. Checked
+    /// before a request goes out, so a Broker that went away between calls
+    /// never leaves a `send` or `read` in doubt.
+    fn is_closed(&mut self) -> bool {
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        // Pending: open and quiet, as it should be between requests. Anything
+        // else (end of stream, an error, or an unasked-for line) means this
+        // connection can no longer be trusted.
+        !std::pin::Pin::new(&mut self.lines).poll_next_line(&mut cx).is_pending()
+    }
+
+    /// Write one request line and read one response line.
+    async fn exchange(&mut self, request: &Request) -> Result<Response, Failure> {
+        let mut line = serde_json::to_string(request).expect("requests always serialize");
+        line.push('\n');
+        self.writer.write_all(line.as_bytes()).await.map_err(|e| Failure::Lost(e.to_string()))?;
+        let reply = self
+            .lines
+            .next_line()
+            .await
+            .map_err(|e| Failure::Lost(e.to_string()))?
+            .ok_or_else(|| Failure::Lost("connection closed".into()))?;
+        serde_json::from_str::<Response>(&reply).map_err(|e| Failure::BadReply(e.to_string()))
+    }
 }
 
 /// Start `<this binary> broker` detached in its own process group, so it
 /// outlives the Session that started it. Its stderr goes to the broker log.
 fn start_broker(settings: &Settings) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    private_fs::ensure_dir(&settings.runtime_dir)?;
     let log = private_fs::open_append(&settings.broker_log_path())?;
     let exe = std::env::current_exe().context("cannot find the peerpost binary")?;
     let mut child = std::process::Command::new(exe)

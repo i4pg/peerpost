@@ -3,6 +3,7 @@
 //! One binary, several roles chosen by the first argument:
 //! - no argument: the MCP server over stdio (one per Session)
 //! - `broker`: the Broker (normally started on demand, never by hand)
+//! - `prune`: empty the Message log now
 
 mod broker;
 mod client;
@@ -21,6 +22,26 @@ async fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         None | Some("serve") => mcp::serve_stdio(settings).await,
         Some("broker") => broker::run(settings).await,
-        Some(other) => bail!("unknown command `{other}`; expected no argument (MCP server) or `broker`"),
+        Some("prune") => prune(settings).await,
+        Some(other) => bail!("unknown command `{other}`; expected no argument (MCP server), `broker` or `prune`"),
+    }
+}
+
+/// Empty the Message log. The Broker owns the log, so this asks the running
+/// Broker (starting one if none runs) rather than touching the file behind
+/// its back; a running Broker's memory and file stay in step.
+async fn prune(settings: settings::Settings) -> Result<()> {
+    let broker = client::BrokerClient::connect_or_start(&settings).await?;
+    match broker.request(&protocol::Request::Prune).await {
+        Ok(protocol::Reply::Pruned { removed }) => {
+            println!(
+                "Message log emptied: {removed} Peer message{} removed ({})",
+                if removed == 1 { "" } else { "s" },
+                settings.message_log_path().display()
+            );
+            Ok(())
+        }
+        Ok(other) => bail!("unexpected Broker reply: {other:?}"),
+        Err(e) => bail!("prune failed: {e}"),
     }
 }
