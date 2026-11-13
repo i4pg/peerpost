@@ -19,6 +19,11 @@ async fn codex_call(session: &Session, thread_id: &str, tool: &str, args: Option
     session.call(tool, args, codex_meta(thread_id)).await
 }
 
+/// The texts of the Peer messages in a `read` result, in order.
+fn texts(read: &Value) -> Vec<&str> {
+    read["messages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect()
+}
+
 #[tokio::test]
 async fn the_first_call_with_a_new_thread_id_registers_codex_plus_its_first_four_hex() {
     let env = TestEnv::new();
@@ -47,11 +52,9 @@ async fn two_threads_over_one_mcp_connection_are_two_sessions_that_each_read_onl
     claude.send(&b, "for b").await.ok();
 
     let read_a = codex_call(&codex, THREAD_A, "read", None).await.ok();
-    let texts_a: Vec<&Value> = read_a["messages"].as_array().unwrap().iter().map(|m| &m["text"]).collect();
-    assert_eq!(texts_a, [&json!("for a")], "{read_a}");
+    assert_eq!(texts(&read_a), ["for a"], "{read_a}");
     let read_b = codex_call(&codex, THREAD_B, "read", None).await.ok();
-    let texts_b: Vec<&Value> = read_b["messages"].as_array().unwrap().iter().map(|m| &m["text"]).collect();
-    assert_eq!(texts_b, [&json!("for b")], "{read_b}");
+    assert_eq!(texts(&read_b), ["for b"], "{read_b}");
     assert_eq!(read_b["messages"][0]["sender"], "claude");
 
     let sent = codex_call(&codex, THREAD_B, "send", Some(json!({ "recipient": a, "text": "b to a" }))).await.ok();
@@ -106,4 +109,30 @@ async fn a_codex_session_stays_live_only_while_its_mcp_connection_is_open() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("both Codex Sessions should leave when their connection closes: {live}");
+}
+
+#[tokio::test]
+async fn a_thread_already_live_on_another_mcp_server_is_refused_rather_than_named_twice() {
+    let env = TestEnv::new();
+    let first = env.plain_session().await;
+    let second = env.plain_session().await;
+    let claude = env.claude_session(Some("claude")).await;
+
+    assert_eq!(codex_call(&first, THREAD_A, "who", None).await.you(), "codex-01a1");
+    let refused = codex_call(&second, THREAD_A, "who", None).await;
+    assert!(refused.is_error, "{}", refused.text);
+    let error = refused.json()["error"].as_str().unwrap().to_string();
+    assert!(error.contains(THREAD_A) && error.contains("codex-01a1"), "the error names the live Session: {error}");
+    let live = claude.who().await.ok();
+    assert_eq!(live["sessions"], json!(["claude", "codex-01a1"]), "one Session per thread: {live}");
+}
+
+#[tokio::test]
+async fn relay_name_cannot_take_a_codex_name() {
+    let env = TestEnv::new();
+    let claude = env.claude_session(Some("codex-01a1")).await;
+
+    let refused = claude.who().await;
+    assert!(refused.is_error, "{}", refused.text);
+    assert!(refused.json()["error"].as_str().unwrap().contains("codex-"), "{}", refused.text);
 }

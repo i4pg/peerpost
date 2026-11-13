@@ -4,9 +4,8 @@
 //! version sends, with the Codex source location that defines it. The README
 //! must list exactly these versions.
 //!
-//! The fixtures are recorded by hand from Codex's source. To check a Codex
-//! source checkout directly, set `PEERPOST_CODEX_SOURCE` to its root and run
-//! `cargo test --test codex_compat`; without it that one check is skipped.
+//! The fixtures are recorded by hand from Codex's source. The check against a
+//! Codex source checkout is `#[ignore]`d by default; see its doc comment.
 
 mod common;
 
@@ -50,7 +49,7 @@ async fn every_supported_codex_versions_recorded_tool_call_registers_a_codex_ses
         let env = TestEnv::new();
         let codex = env.plain_session().await;
         let out = codex.call(params["name"].as_str().unwrap(), Some(params["arguments"].clone()), Some(meta)).await;
-        let expected = format!("codex-{}", &thread[..4]);
+        let expected = format!("codex-{}", thread.replace('-', "").get(..4).expect("four hex digits"));
         assert_eq!(out.ok()["you"], expected.as_str(), "Codex {version}");
     }
 }
@@ -72,13 +71,15 @@ fn the_readme_lists_exactly_the_tested_codex_versions_and_labels_the_field_undoc
     assert!(readme.contains("`_meta.threadId`") && readme.contains("undocumented"), "README labels the field");
 }
 
-/// Opt-in: checks a Codex source checkout still defines the field.
+/// Needs a Codex source checkout, so it is ignored by default (and shows as
+/// ignored in every run). Run it before adding a Codex version:
+/// `PEERPOST_CODEX_SOURCE=<checkout> cargo test --test codex_compat -- --ignored`.
 #[test]
+#[ignore = "needs PEERPOST_CODEX_SOURCE pointing at a Codex source checkout"]
 fn a_codex_source_checkout_still_sets_thread_id_on_tool_calls() {
-    let Some(root) = std::env::var_os("PEERPOST_CODEX_SOURCE").map(PathBuf::from) else {
-        eprintln!("skipped: set PEERPOST_CODEX_SOURCE to a Codex source checkout to run this check");
-        return;
-    };
+    let root = PathBuf::from(
+        std::env::var_os("PEERPOST_CODEX_SOURCE").expect("set PEERPOST_CODEX_SOURCE to a Codex source checkout"),
+    );
     let file = root.join(CODEX_META_SOURCE);
     let source = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
     assert!(source.contains("\"threadId\""), "{} no longer sets `threadId`: see ADR 0006", file.display());

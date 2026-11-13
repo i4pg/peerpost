@@ -14,7 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::message_log::MessageLog;
 use crate::private_fs;
-use crate::protocol::{Reply, Request, Response};
+use crate::protocol::{Reply, Request, Response, NAME_TAKEN};
 use crate::settings::Settings;
 
 /// How often the Broker checks that its socket file is still in place.
@@ -32,7 +32,6 @@ struct LiveSession {
     /// The connection that registered it; it may act only for its own.
     conn: ConnId,
     /// A Codex Session's thread id (ADR 0006), for `codex queue --thread`.
-    #[allow(dead_code)] // read by the Nudge (ticket 07)
     codex_thread: Option<String>,
 }
 
@@ -113,7 +112,13 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
     match request {
         Request::Register { session, codex_thread } => {
             if state.sessions.contains_key(&session) {
-                return Err(format!("the Sender name `{session}` is already used by a live Session"));
+                return Err(format!("the Sender name `{session}` {NAME_TAKEN}"));
+            }
+            if let Some(thread) = &codex_thread {
+                // One Session per Codex thread, so a Nudge has one target.
+                if let Some((name, _)) = state.sessions.iter().find(|(_, s)| s.codex_thread.as_ref() == Some(thread)) {
+                    return Err(format!("Codex thread {thread} is already live as `{name}` on another connection"));
+                }
             }
             state.sessions.insert(session, LiveSession { conn, codex_thread });
             Ok(Reply::Registered)

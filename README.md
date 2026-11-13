@@ -16,7 +16,7 @@ A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` 
 
 ## Codex Sessions
 
-Codex CLI may run one peerpost MCP server for many Codex chats at once, so peerpost tells Codex Sessions apart on every tool call by the thread id Codex puts in the call's `_meta.threadId`. The first relay tool call from a thread registers it as a Session named `codex-` plus the first four hex digits of its thread id, lengthened until no live Session has that name. Codex thread ids start with a timestamp, so threads started close together share their first digits and later ones get longer names (such as `codex-01a1b`).
+Codex CLI may run one peerpost MCP server for many Codex Sessions at once, so peerpost tells Codex Sessions apart on every tool call by the thread id Codex puts in the call's `_meta.threadId`. The first relay tool call from a thread registers it as a Session named `codex-` plus the first four hex digits of its thread id, lengthened until no live Session has that name. Codex thread ids start with a timestamp, so threads started close together share their first digits and later ones get longer names (such as `codex-01a1b`). Names starting with `codex-` are kept for Codex Sessions, so `RELAY_NAME` cannot use them.
 
 `_meta.threadId` is **undocumented**: Codex defines it in its open-source code (`codex-rs/core/src/mcp_tool_call.rs`), not in its docs, and may change it without notice (ADR 0006). A tool call that is not from Claude Code and carries no `_meta.threadId` is refused with an error; peerpost never guesses which Session is calling.
 

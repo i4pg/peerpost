@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
 use crate::client::BrokerClient;
-use crate::protocol::{Reply, Request};
+use crate::protocol::{Reply, Request, NAME_TAKEN};
 use crate::settings::Settings;
 
 const INSTRUCTIONS: &str = "peerpost relays Peer messages between Sessions on this computer. \
@@ -36,6 +36,9 @@ const AUTO_NAME_ATTEMPTS: usize = 16;
 /// tested Codex versions).
 const CODEX_THREAD_KEY: &str = "threadId";
 
+/// Every Codex Sender name, and only those, starts with this.
+const CODEX_NAME_PREFIX: &str = "codex-";
+
 /// A Codex Sender name starts with this many hex digits of the thread id.
 const CODEX_NAME_MIN_HEX: usize = 4;
 
@@ -43,8 +46,8 @@ const CODEX_NAME_MIN_HEX: usize = 4;
 enum Identity {
     /// A Claude Session, registered once at start under this Sender name.
     Claude(String),
-    /// Not a Claude Session: each call must name its Codex thread.
-    PerCall,
+    /// Not a Claude Session, so a Codex one: each call must name its thread.
+    Codex,
 }
 
 pub struct RelayServer {
@@ -68,7 +71,7 @@ impl RelayServer {
         let identity = match &broker {
             Err(e) => Err(e.clone()),
             Ok(broker) if is_claude() => register_claude(broker).await.map(Identity::Claude),
-            Ok(_) => Ok(Identity::PerCall),
+            Ok(_) => Ok(Identity::Codex),
         };
         Self { broker, identity, codex_sessions: Mutex::new(HashMap::new()) }
     }
@@ -79,9 +82,9 @@ impl RelayServer {
     async fn caller(&self, context: &RequestContext<RoleServer>) -> Result<String, String> {
         match self.identity.as_ref().map_err(Clone::clone)? {
             Identity::Claude(name) => Ok(name.clone()),
-            Identity::PerCall => {
-                let thread = codex_thread_id(context.meta.get(CODEX_THREAD_KEY))?;
-                self.codex_session(thread).await
+            Identity::Codex => {
+                let thread = CodexThread::from_meta(context.meta.get(CODEX_THREAD_KEY))?;
+                self.codex_session(&thread).await
             }
         }
     }
@@ -89,26 +92,19 @@ impl RelayServer {
     /// The Sender name of the Codex Session for `thread`, registering it on
     /// its first call as `codex-` plus the thread id's first hex digits,
     /// lengthened until no live Session has that name.
-    async fn codex_session(&self, thread: &str) -> Result<String, String> {
+    async fn codex_session(&self, thread: &CodexThread) -> Result<String, String> {
         let mut sessions = self.codex_sessions.lock().await;
-        if let Some(name) = sessions.get(thread) {
+        if let Some(name) = sessions.get(&thread.id) {
             return Ok(name.clone());
         }
         let broker = self.broker.as_ref().map_err(Clone::clone)?;
-        let hex: String = thread.chars().filter(|c| *c != '-').collect();
-        let mut last_error = String::new();
-        for len in CODEX_NAME_MIN_HEX..=hex.len() {
-            let name = format!("codex-{}", &hex[..len]);
-            let register = Request::Register { session: name.clone(), codex_thread: Some(thread.to_string()) };
-            match broker.request(&register).await {
-                Ok(_) => {
-                    sessions.insert(thread.to_string(), name.clone());
-                    return Ok(name);
-                }
-                Err(e) => last_error = e,
-            }
-        }
-        Err(format!("could not register Codex thread {thread}: {last_error}"))
+        let names =
+            (CODEX_NAME_MIN_HEX..=thread.hex.len()).map(|len| format!("{CODEX_NAME_PREFIX}{}", &thread.hex[..len]));
+        let name = register_first_free(broker, names, Some(&thread.id))
+            .await
+            .map_err(|e| format!("could not register Codex thread {}: {e}", thread.id))?;
+        sessions.insert(thread.id.clone(), name.clone());
+        Ok(name)
     }
 
     async fn run_tool(&self, request: &CallToolRequestParams, context: &RequestContext<RoleServer>) -> CallToolResult {
@@ -149,27 +145,37 @@ impl RelayServer {
     }
 }
 
-/// The Codex thread id from a tool call's `_meta.threadId`, checked to be a
-/// lowercase hex id (dashes allowed, as in Codex's UUIDs). Without it the call
-/// is refused: peerpost never guesses which Session is speaking.
-fn codex_thread_id(value: Option<&Value>) -> Result<&str, String> {
-    let thread = match value {
-        Some(Value::String(thread)) => thread.as_str(),
-        Some(other) => return Err(format!("`_meta.{CODEX_THREAD_KEY}` must be a string, got {other}")),
-        None => {
-            return Err(format!(
-                "peerpost cannot tell which Session is calling: this is not a Claude Code Session (CLAUDECODE=1 \
+/// A Codex thread id from a tool call's `_meta.threadId`: lowercase hex with
+/// optional dashes, as in Codex's UUIDs.
+struct CodexThread {
+    /// The id as Codex sent it; `codex queue --thread` takes this form.
+    id: String,
+    /// Its hex digits without dashes; Sender names are built from these.
+    hex: String,
+}
+
+impl CodexThread {
+    /// Without a well-formed `_meta.threadId` the call is refused: peerpost
+    /// never guesses which Session is speaking.
+    fn from_meta(value: Option<&Value>) -> Result<Self, String> {
+        let thread = match value {
+            Some(Value::String(thread)) => thread.as_str(),
+            Some(other) => return Err(format!("`_meta.{CODEX_THREAD_KEY}` must be a string, got {other}")),
+            None => {
+                return Err(format!(
+                    "peerpost cannot tell which Session is calling: this is not a Claude Code Session (CLAUDECODE=1 \
                  is not set) and the tool call carries no `_meta.{CODEX_THREAD_KEY}` (which Codex CLI sets), so it \
                  refuses rather than guessing"
-            ))
+                ))
+            }
+        };
+        let well_formed = thread.chars().all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c));
+        let hex: String = thread.chars().filter(|c| *c != '-').collect();
+        if !well_formed || hex.len() < CODEX_NAME_MIN_HEX {
+            return Err(format!("`_meta.{CODEX_THREAD_KEY}` is not a Codex thread id: {thread:?}"));
         }
-    };
-    let hex_digits = thread.chars().filter(|c| *c != '-').count();
-    let well_formed = thread.chars().all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c));
-    if !well_formed || hex_digits < CODEX_NAME_MIN_HEX {
-        return Err(format!("`_meta.{CODEX_THREAD_KEY}` is not a Codex thread id: {thread:?}"));
+        Ok(Self { id: thread.to_string(), hex })
     }
-    Ok(thread)
 }
 
 fn is_claude() -> bool {
@@ -179,18 +185,35 @@ fn is_claude() -> bool {
 /// Register under `RELAY_NAME` if set, else a free `claude-<4 hex>`.
 async fn register_claude(broker: &BrokerClient) -> Result<String, String> {
     if let Some(name) = std::env::var("RELAY_NAME").ok().filter(|n| !n.is_empty()) {
+        if name.starts_with(CODEX_NAME_PREFIX) {
+            return Err(format!(
+                "RELAY_NAME `{name}` starts with `{CODEX_NAME_PREFIX}`, which only Codex Sessions use; pick another name"
+            ));
+        }
         broker.request(&Request::Register { session: name.clone(), codex_thread: None }).await?;
         return Ok(name);
     }
-    let mut last_error = String::new();
-    for _ in 0..AUTO_NAME_ATTEMPTS {
-        let name = format!("claude-{:04x}", rand::random::<u16>());
-        match broker.request(&Request::Register { session: name.clone(), codex_thread: None }).await {
+    let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("claude-{:04x}", rand::random::<u16>()));
+    register_first_free(broker, names, None).await.map_err(|e| format!("could not find a free Sender name: {e}"))
+}
+
+/// Register the first of `names` the Broker accepts, moving on only while a
+/// name is taken; any other Broker error is returned at once.
+async fn register_first_free(
+    broker: &BrokerClient,
+    names: impl Iterator<Item = String>,
+    codex_thread: Option<&str>,
+) -> Result<String, String> {
+    let mut last_error = String::from("no names to try");
+    for name in names {
+        let register = Request::Register { session: name.clone(), codex_thread: codex_thread.map(str::to_string) };
+        match broker.request(&register).await {
             Ok(_) => return Ok(name),
-            Err(e) => last_error = e,
+            Err(e) if e.contains(NAME_TAKEN) => last_error = e,
+            Err(e) => return Err(e),
         }
     }
-    Err(format!("could not find a free Sender name: {last_error}"))
+    Err(last_error)
 }
 
 fn string_arg(args: &Map<String, Value>, key: &str) -> Result<String, String> {

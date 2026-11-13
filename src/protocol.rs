@@ -29,6 +29,10 @@ pub enum Request {
     Read { session: String },
 }
 
+/// The end of the Broker's error when a Sender name is already live; a
+/// client that picks names itself tries another name only on this error.
+pub const NAME_TAKEN: &str = "is already used by a live Session";
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
