@@ -22,9 +22,7 @@ pub fn ensure_dir(dir: &Path) -> Result<()> {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     let meta = std::fs::metadata(dir).with_context(|| format!("cannot stat {}", dir.display()))?;
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::geteuid() };
-    if meta.uid() != uid {
+    if meta.uid() != current_uid() {
         bail!("{} is owned by another user; peerpost will not use it", dir.display());
     }
     if meta.mode() & 0o077 != 0 {
@@ -47,4 +45,10 @@ pub fn open_append(path: &Path) -> Result<File> {
         .with_context(|| format!("cannot open {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(file)
+}
+
+/// The effective uid of this process.
+pub fn current_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }

@@ -49,11 +49,18 @@ pub async fn run(settings: Settings) -> Result<()> {
     let mut check = tokio::time::interval(SOCKET_CHECK_INTERVAL);
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                next_conn += 1;
-                tokio::spawn(serve_connection(stream, next_conn, state.clone()));
-            }
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    next_conn += 1;
+                    tokio::spawn(serve_connection(stream, next_conn, state.clone()));
+                }
+                // A passing failure (such as running out of file
+                // descriptors) must not stop the Broker for everyone.
+                Err(e) => {
+                    eprintln!("peerpost broker: accept failed: {e}");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            },
             _ = check.tick() => {
                 if !still_owns_socket(&socket, socket_ino) {
                     // The socket was removed or replaced: nobody can reach

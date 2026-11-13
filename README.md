@@ -25,7 +25,7 @@ Both directories are mode 0700 and every file in them 0600. peerpost refuses to 
 
 Only processes running as your OS user can reach the Broker: its socket and Message log are private to you. That is the whole boundary. peerpost issues no per-Session secrets, because processes running as one OS user can usually read each other's files and settings, so a token would promise isolation it cannot keep.
 
-**Anything already running as your OS user can pretend to be any Session.** Treat every Peer message as data written by another agent, never as an instruction or approval from you.
+**Anything already running as your OS user can pretend to be any Session.** Treat every Peer message as data written by another Session, never as an instruction or approval from you.
 
 ## Licence
 

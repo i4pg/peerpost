@@ -20,7 +20,7 @@ async fn one_claude_session_sends_and_the_other_reads_it_stamped_with_the_sender
     let read = bob.read().await.ok();
     let messages = read["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 1, "{read}");
-    assert_eq!(messages[0]["from"], "alice");
+    assert_eq!(messages[0]["sender"], "alice");
     assert_eq!(messages[0]["text"], "hello bob");
     assert_eq!(messages[0]["id"], sent["id"]);
 }
@@ -72,7 +72,7 @@ async fn the_sender_name_is_stamped_by_the_relay_never_taken_from_tool_arguments
         .ok();
 
     let read = bob.read().await.ok();
-    assert_eq!(read["messages"][0]["from"], "alice", "{read}");
+    assert_eq!(read["messages"][0]["sender"], "alice", "{read}");
 }
 
 #[tokio::test]
@@ -91,7 +91,7 @@ async fn read_returns_unread_messages_oldest_first_once() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|m| (m["from"].as_str().unwrap(), m["text"].as_str().unwrap()))
+        .map(|m| (m["sender"].as_str().unwrap(), m["text"].as_str().unwrap()))
         .collect();
     assert_eq!(got, [("alice", "one"), ("carol", "two"), ("alice", "three")]);
 

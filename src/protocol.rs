@@ -44,7 +44,7 @@ pub enum Reply {
 pub struct PeerMessage {
     pub id: u64,
     /// The Sender name the Broker stamped; never taken from the message.
-    pub from: String,
+    pub sender: String,
     pub text: String,
     /// Seconds since the Unix epoch when the Broker accepted the message.
     pub accepted_at: u64,

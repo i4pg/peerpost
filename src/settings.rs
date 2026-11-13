@@ -48,9 +48,7 @@ fn runtime_dir() -> Result<PathBuf> {
     if let Some(dir) = env_path("XDG_RUNTIME_DIR") {
         return Ok(dir.join("peerpost"));
     }
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::geteuid() };
-    Ok(std::env::temp_dir().join(format!("peerpost-{uid}")))
+    Ok(std::env::temp_dir().join(format!("peerpost-{}", crate::private_fs::current_uid())))
 }
 
 /// `$PEERPOST_DATA_DIR`, else `$XDG_DATA_HOME/peerpost`, else
