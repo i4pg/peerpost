@@ -96,7 +96,9 @@ async fn fill(sender: &common::Session, recipient: &str, max: usize) -> (usize, 
 
 #[tokio::test]
 async fn both_limits_can_be_set_with_environment_variables() {
-    let env = TestEnv::new().with_var("PEERPOST_MAX_MESSAGE_BYTES", "10").with_var("PEERPOST_MAX_UNREAD", "3");
+    let mut env = TestEnv::new();
+    env.set_var("PEERPOST_MAX_MESSAGE_BYTES", "10");
+    env.set_var("PEERPOST_MAX_UNREAD", "3");
     let alice = env.claude_session(Some("alice")).await;
     let _bob = env.claude_session(Some("bob")).await;
 
@@ -123,7 +125,8 @@ async fn both_limits_can_be_set_in_the_settings_file_in_the_os_users_config_dire
 
 #[tokio::test]
 async fn an_environment_variable_wins_over_the_settings_file() {
-    let env = TestEnv::new().with_var("PEERPOST_MAX_UNREAD", "4");
+    let mut env = TestEnv::new();
+    env.set_var("PEERPOST_MAX_UNREAD", "4");
     env.write_settings_file("max_unread = 2\n");
     let alice = env.claude_session(Some("alice")).await;
     let _bob = env.claude_session(Some("bob")).await;

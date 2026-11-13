@@ -18,6 +18,11 @@ pub const ENV_MAX_MESSAGE_BYTES: &str = "PEERPOST_MAX_MESSAGE_BYTES";
 /// Overrides how many unread Peer messages one Recipient may hold.
 pub const ENV_MAX_UNREAD: &str = "PEERPOST_MAX_UNREAD";
 
+/// How many Peer messages the Message log keeps; older ones are dropped.
+pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
+
+/// The default for [`ENV_LOG_KEEP`].
+pub const DEFAULT_LOG_KEEP: usize = 10_000;
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_UNREAD: usize = 100;
 
@@ -29,6 +34,8 @@ pub struct Settings {
     pub max_message_bytes: usize,
     /// Most unread Peer messages one Recipient may hold.
     pub max_unread: usize,
+    /// The Message log keeps only this many newest Peer messages (at least 1).
+    pub log_keep: usize,
 }
 
 /// The settings file's keys; every one is optional.
@@ -37,6 +44,7 @@ pub struct Settings {
 struct SettingsFile {
     max_message_bytes: Option<usize>,
     max_unread: Option<usize>,
+    log_keep: Option<usize>,
 }
 
 impl Settings {
@@ -56,6 +64,7 @@ impl Settings {
                 DEFAULT_MAX_MESSAGE_BYTES,
             )?,
             max_unread: limit(ENV_MAX_UNREAD, "max_unread", file.max_unread, DEFAULT_MAX_UNREAD)?,
+            log_keep: limit(ENV_LOG_KEEP, "log_keep", file.log_keep, DEFAULT_LOG_KEEP)?,
         })
     }
 

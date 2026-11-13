@@ -12,8 +12,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
-    /// Register a Session under `session` on this connection.
-    Register { session: String },
+    /// Register a Session under `session` on this connection. A Codex
+    /// Session also gives its Codex thread id, which the Broker keeps so it
+    /// can Nudge that thread.
+    Register {
+        session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        codex_thread: Option<String>,
+    },
     /// List the Sender names of live Sessions.
     Who,
     /// Accept a Peer message from `session` (stamped as its Sender name) to
@@ -21,7 +27,14 @@ pub enum Request {
     Send { session: String, recipient: String, text: String },
     /// Return `session`'s unread Peer messages, oldest first, and mark them read.
     Read { session: String },
+    /// Empty the Message log now, read and unread alike (`peerpost prune`).
+    /// Acts for no Session; anyone who can reach the socket may ask.
+    Prune,
 }
+
+/// The end of the Broker's error when a Sender name is already live; a
+/// client that picks names itself tries another name only on this error.
+pub const NAME_TAKEN: &str = "is already used by a live Session";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -37,6 +50,7 @@ pub enum Reply {
     Sessions(Vec<String>),
     Accepted { id: u64 },
     Messages(Vec<PeerMessage>),
+    Pruned { removed: usize },
 }
 
 /// A Peer message as handed to its Recipient.

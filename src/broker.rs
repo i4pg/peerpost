@@ -14,7 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::message_log::MessageLog;
 use crate::private_fs;
-use crate::protocol::{Reply, Request, Response};
+use crate::protocol::{Reply, Request, Response, NAME_TAKEN};
 use crate::settings::Settings;
 
 /// How often the Broker checks that its socket file is still in place.
@@ -24,10 +24,17 @@ type ConnId = u64;
 
 struct State {
     log: MessageLog,
-    /// Live Sessions: Sender name -> the connection that registered it.
-    sessions: HashMap<String, ConnId>,
+    /// Live Sessions by Sender name.
+    sessions: HashMap<String, LiveSession>,
     max_message_bytes: usize,
     max_unread: usize,
+}
+
+struct LiveSession {
+    /// The connection that registered it; it may act only for its own.
+    conn: ConnId,
+    /// A Codex Session's thread id (ADR 0006), for `codex queue --thread`.
+    codex_thread: Option<String>,
 }
 
 pub async fn run(settings: Settings) -> Result<()> {
@@ -45,7 +52,7 @@ pub async fn run(settings: Settings) -> Result<()> {
     let socket_ino = std::fs::metadata(&socket)?.ino();
 
     let state = Arc::new(Mutex::new(State {
-        log: MessageLog::open(&settings.message_log_path())?,
+        log: MessageLog::open(&settings.message_log_path(), settings.log_keep)?,
         sessions: HashMap::new(),
         max_message_bytes: settings.max_message_bytes,
         max_unread: settings.max_unread,
@@ -97,7 +104,7 @@ async fn serve_connection(stream: UnixStream, conn: ConnId, state: Arc<Mutex<Sta
         }
     }
     let mut state = state.lock().expect("broker state poisoned");
-    state.sessions.retain(|_, owner| *owner != conn);
+    state.sessions.retain(|_, live| live.conn != conn);
 }
 
 fn handle(state: &mut State, conn: ConnId, request: Request) -> Response {
@@ -109,11 +116,17 @@ fn handle(state: &mut State, conn: ConnId, request: Request) -> Response {
 
 fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Reply, String> {
     match request {
-        Request::Register { session } => {
+        Request::Register { session, codex_thread } => {
             if state.sessions.contains_key(&session) {
-                return Err(format!("the Sender name `{session}` is already used by a live Session"));
+                return Err(format!("the Sender name `{session}` {NAME_TAKEN}"));
             }
-            state.sessions.insert(session, conn);
+            if let Some(thread) = &codex_thread {
+                // One Session per Codex thread, so a Nudge has one target.
+                if let Some((name, _)) = state.sessions.iter().find(|(_, s)| s.codex_thread.as_ref() == Some(thread)) {
+                    return Err(format!("Codex thread {thread} is already live as `{name}` on another connection"));
+                }
+            }
+            state.sessions.insert(session, LiveSession { conn, codex_thread });
             Ok(Reply::Registered)
         }
         Request::Who => {
@@ -151,13 +164,17 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
             let messages = state.log.take_unread(&session).map_err(|e| format!("{e:#}"))?;
             Ok(Reply::Messages(messages))
         }
+        Request::Prune => {
+            let removed = state.log.clear().map_err(|e| format!("{e:#}"))?;
+            Ok(Reply::Pruned { removed })
+        }
     }
 }
 
 /// A connection may only act for Sessions it registered itself.
 fn check_owner(state: &State, conn: ConnId, session: &str) -> Result<(), String> {
     match state.sessions.get(session) {
-        Some(owner) if *owner == conn => Ok(()),
+        Some(live) if live.conn == conn => Ok(()),
         _ => Err(format!("`{session}` is not a Session registered on this connection")),
     }
 }
