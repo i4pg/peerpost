@@ -42,8 +42,10 @@ pub async fn run(settings: Settings) -> Result<()> {
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     let socket_ino = std::fs::metadata(&socket)?.ino();
 
-    let state =
-        Arc::new(Mutex::new(State { log: MessageLog::open(&settings.message_log_path())?, sessions: HashMap::new() }));
+    let state = Arc::new(Mutex::new(State {
+        log: MessageLog::open(&settings.message_log_path(), settings.log_keep)?,
+        sessions: HashMap::new(),
+    }));
 
     let mut next_conn: ConnId = 0;
     let mut check = tokio::time::interval(SOCKET_CHECK_INTERVAL);
@@ -124,6 +126,10 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
             check_owner(state, conn, &session)?;
             let messages = state.log.take_unread(&session).map_err(|e| format!("{e:#}"))?;
             Ok(Reply::Messages(messages))
+        }
+        Request::Prune => {
+            let removed = state.log.clear().map_err(|e| format!("{e:#}"))?;
+            Ok(Reply::Pruned { removed })
         }
     }
 }

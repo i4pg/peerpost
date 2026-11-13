@@ -47,6 +47,19 @@ pub fn open_append(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// Create `path` (or empty an existing one) for writing, with mode 0600.
+pub fn create_truncate(path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
 /// The effective uid of this process.
 pub fn current_uid() -> u32 {
     // SAFETY: geteuid has no preconditions and cannot fail.

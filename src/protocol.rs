@@ -21,6 +21,9 @@ pub enum Request {
     Send { session: String, recipient: String, text: String },
     /// Return `session`'s unread Peer messages, oldest first, and mark them read.
     Read { session: String },
+    /// Empty the Message log now, read and unread alike (`peerpost prune`).
+    /// Acts for no Session; anyone who can reach the socket may ask.
+    Prune,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +40,7 @@ pub enum Reply {
     Sessions(Vec<String>),
     Accepted { id: u64 },
     Messages(Vec<PeerMessage>),
+    Pruned { removed: usize },
 }
 
 /// A Peer message as handed to its Recipient.

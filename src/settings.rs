@@ -10,16 +10,22 @@ use anyhow::{Context, Result};
 pub const ENV_RUNTIME_DIR: &str = "PEERPOST_RUNTIME_DIR";
 /// Overrides the per-user data directory (Message log).
 pub const ENV_DATA_DIR: &str = "PEERPOST_DATA_DIR";
+/// How many Peer messages the Message log keeps; older ones are dropped.
+pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
+/// The default for [`ENV_LOG_KEEP`].
+pub const DEFAULT_LOG_KEEP: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub runtime_dir: PathBuf,
     pub data_dir: PathBuf,
+    /// The Message log keeps only this many newest Peer messages (at least 1).
+    pub log_keep: usize,
 }
 
 impl Settings {
     pub fn from_env() -> Result<Self> {
-        Ok(Self { runtime_dir: runtime_dir()?, data_dir: data_dir()? })
+        Ok(Self { runtime_dir: runtime_dir()?, data_dir: data_dir()?, log_keep: log_keep()? })
     }
 
     pub fn socket_path(&self) -> PathBuf {
@@ -62,4 +68,16 @@ fn data_dir() -> Result<PathBuf> {
     }
     let home = env_path("HOME").context("cannot find a data directory: set HOME or PEERPOST_DATA_DIR")?;
     Ok(home.join(".local").join("share").join("peerpost"))
+}
+
+/// `$PEERPOST_LOG_KEEP`, else [`DEFAULT_LOG_KEEP`]; must be a whole number of
+/// at least 1.
+fn log_keep() -> Result<usize> {
+    let Some(raw) = std::env::var_os(ENV_LOG_KEEP).filter(|v| !v.is_empty()) else {
+        return Ok(DEFAULT_LOG_KEEP);
+    };
+    match raw.to_str().and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(n) if n >= 1 => Ok(n),
+        _ => anyhow::bail!("{ENV_LOG_KEEP} must be a whole number of at least 1, got {raw:?}"),
+    }
 }
