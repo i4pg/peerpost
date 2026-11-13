@@ -49,7 +49,8 @@ async fn every_supported_codex_versions_recorded_tool_call_registers_a_codex_ses
         let env = TestEnv::new();
         let codex = env.plain_session().await;
         let out = codex.call(params["name"].as_str().unwrap(), Some(params["arguments"].clone()), Some(meta)).await;
-        let expected = format!("codex-{}", thread.replace('-', "").get(..4).expect("four hex digits"));
+        let hex = thread.replace('-', "");
+        let expected = format!("codex-{}", hex.get(hex.len() - 4..).expect("four hex digits"));
         assert_eq!(out.ok()["you"], expected.as_str(), "Codex {version}");
     }
 }

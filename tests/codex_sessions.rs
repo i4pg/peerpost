@@ -6,10 +6,12 @@ mod common;
 use common::{Session, TestEnv, ToolOutput};
 use serde_json::{json, Value};
 
-/// Real Codex thread ids are UUIDv7, so threads started near each other
-/// share their leading hex digits.
+/// Real Codex thread ids are UUIDv7: a timestamp first, random digits last.
+/// A and B started in the same millisecond, so only their tails differ.
 const THREAD_A: &str = "01a1bd9e-a4ad-7d53-8744-7ad65f511b6b";
-const THREAD_B: &str = "01a1bd9f-2011-72d3-a147-104c5e158a8a";
+const THREAD_B: &str = "01a1bd9e-a4ad-7f12-9c3e-2e81a40d7c55";
+/// Ends in the same four hex digits as A, by chance.
+const THREAD_TAIL_CLASH: &str = "01a1bd9f-2011-72d3-a147-104c5e101b6b";
 
 fn codex_meta(thread_id: &str) -> Option<Value> {
     Some(json!({ "threadId": thread_id }))
@@ -25,15 +27,15 @@ fn texts(read: &Value) -> Vec<&str> {
 }
 
 #[tokio::test]
-async fn the_first_call_with_a_new_thread_id_registers_codex_plus_its_first_four_hex() {
+async fn the_first_call_with_a_new_thread_id_registers_codex_plus_the_last_four_hex_of_its_random_tail() {
     let env = TestEnv::new();
     let codex = env.plain_session().await;
     let claude = env.claude_session(Some("claude")).await;
 
     let who = codex_call(&codex, THREAD_A, "who", None).await.ok();
-    assert_eq!(who["you"], "codex-01a1", "{who}");
+    assert_eq!(who["you"], "codex-1b6b", "{who}");
     let live = claude.who().await.ok();
-    assert!(live["sessions"].as_array().unwrap().iter().any(|v| v == "codex-01a1"), "{live}");
+    assert!(live["sessions"].as_array().unwrap().iter().any(|v| v == "codex-1b6b"), "{live}");
 }
 
 #[tokio::test]
@@ -44,8 +46,8 @@ async fn two_threads_over_one_mcp_connection_are_two_sessions_that_each_read_onl
 
     let a = codex_call(&codex, THREAD_A, "who", None).await.you();
     let b = codex_call(&codex, THREAD_B, "who", None).await.you();
-    assert_eq!(a, "codex-01a1");
-    assert_eq!(b, "codex-01a1b", "a clash on four hex digits is lengthened until unique");
+    assert_eq!(a, "codex-1b6b");
+    assert_eq!(b, "codex-7c55", "threads started together still get short, distinct names");
     assert_eq!(codex_call(&codex, THREAD_A, "who", None).await.you(), a, "a thread keeps its name");
 
     claude.send(&a, "for a").await.ok();
@@ -69,8 +71,17 @@ async fn codex_threads_on_separate_mcp_servers_get_distinct_names() {
     let first = env.plain_session().await;
     let second = env.plain_session().await;
 
-    assert_eq!(codex_call(&first, THREAD_A, "who", None).await.you(), "codex-01a1");
-    assert_eq!(codex_call(&second, THREAD_B, "who", None).await.you(), "codex-01a1b");
+    assert_eq!(codex_call(&first, THREAD_A, "who", None).await.you(), "codex-1b6b");
+    assert_eq!(codex_call(&second, THREAD_B, "who", None).await.you(), "codex-7c55");
+}
+
+#[tokio::test]
+async fn a_clash_on_the_last_four_hex_is_lengthened_from_the_tail_until_unique() {
+    let env = TestEnv::new();
+    let codex = env.plain_session().await;
+
+    assert_eq!(codex_call(&codex, THREAD_A, "who", None).await.you(), "codex-1b6b");
+    assert_eq!(codex_call(&codex, THREAD_TAIL_CLASH, "who", None).await.you(), "codex-01b6b");
 }
 
 #[tokio::test]
@@ -118,19 +129,19 @@ async fn a_thread_already_live_on_another_mcp_server_is_refused_rather_than_name
     let second = env.plain_session().await;
     let claude = env.claude_session(Some("claude")).await;
 
-    assert_eq!(codex_call(&first, THREAD_A, "who", None).await.you(), "codex-01a1");
+    assert_eq!(codex_call(&first, THREAD_A, "who", None).await.you(), "codex-1b6b");
     let refused = codex_call(&second, THREAD_A, "who", None).await;
     assert!(refused.is_error, "{}", refused.text);
     let error = refused.json()["error"].as_str().unwrap().to_string();
-    assert!(error.contains(THREAD_A) && error.contains("codex-01a1"), "the error names the live Session: {error}");
+    assert!(error.contains(THREAD_A) && error.contains("codex-1b6b"), "the error names the live Session: {error}");
     let live = claude.who().await.ok();
-    assert_eq!(live["sessions"], json!(["claude", "codex-01a1"]), "one Session per thread: {live}");
+    assert_eq!(live["sessions"], json!(["claude", "codex-1b6b"]), "one Session per thread: {live}");
 }
 
 #[tokio::test]
 async fn relay_name_cannot_take_a_codex_name() {
     let env = TestEnv::new();
-    let claude = env.claude_session(Some("codex-01a1")).await;
+    let claude = env.claude_session(Some("codex-1b6b")).await;
 
     let refused = claude.who().await;
     assert!(refused.is_error, "{}", refused.text);
