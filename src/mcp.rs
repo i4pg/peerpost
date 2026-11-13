@@ -38,6 +38,8 @@ const CODEX_THREAD_KEY: &str = "threadId";
 
 /// Every Codex Sender name, and only those, starts with this.
 const CODEX_NAME_PREFIX: &str = "codex-";
+/// An automatic Claude Sender name is this plus four random hex digits.
+const CLAUDE_NAME_PREFIX: &str = "claude-";
 
 /// A Codex Sender name ends with at least this many hex digits from the end
 /// of the thread id. Codex thread ids are UUIDv7: the leading digits are a
@@ -97,10 +99,15 @@ impl RelayServer {
     /// name.
     async fn codex_session(&self, thread: &CodexThread) -> Result<String, String> {
         let mut sessions = self.codex_sessions.lock().await;
-        if let Some(name) = sessions.get(&thread.id) {
-            return Ok(name.clone());
-        }
         let broker = self.broker.as_ref().map_err(Clone::clone)?;
+        if let Some(name) = sessions.get(&thread.id) {
+            // A restarted Broker may have refused the name (another Session
+            // took it first); then the thread registers again.
+            if broker.is_registered(name).await {
+                return Ok(name.clone());
+            }
+            sessions.remove(&thread.id);
+        }
         let names =
             (CODEX_NAME_MIN_HEX..=thread.hex.len()).map(|len| format!("{CODEX_NAME_PREFIX}{}", thread.tail(len)));
         let name = register_first_free(broker, names, Some(&thread.id))
@@ -203,7 +210,7 @@ async fn register_claude(broker: &BrokerClient) -> Result<String, String> {
         })?;
         return Ok(name);
     }
-    let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("claude-{:04x}", rand::random::<u16>()));
+    let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("{CLAUDE_NAME_PREFIX}{:04x}", rand::random::<u16>()));
     register_first_free(broker, names, None).await.map_err(|e| format!("could not find a free Sender name: {e}"))
 }
 

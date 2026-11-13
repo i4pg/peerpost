@@ -65,9 +65,13 @@ impl BrokerClient {
                 None => {
                     let (conn, refused) =
                         self.reconnect(&mut inner.registrations).await.map_err(|e| format!("lost the Broker: {e}"))?;
-                    if let Some(error) = refused {
+                    // Only a call made for a refused Session fails here; the
+                    // client's other Sessions carry on.
+                    if let Some((_, error)) =
+                        refused.into_iter().find(|(name, _)| Some(name.as_str()) == request.session())
+                    {
                         inner.conn = Some(conn);
-                        return Err(error);
+                        return Err(format!("the Broker restarted and refused this Session: {error}"));
                     }
                     conn
                 }
@@ -96,23 +100,29 @@ impl BrokerClient {
         Err(format!("lost the Broker: {lost}"))
     }
 
+    /// Whether `name` is registered through this client: false once a
+    /// restarted Broker refused it (see [`Self::request`]).
+    pub async fn is_registered(&self, name: &str) -> bool {
+        self.inner.lock().await.registrations.iter().any(|r| r.session() == Some(name))
+    }
+
     /// Open a connection and register `registrations` on it again. A Sender
     /// name a new Session took in the meantime is dropped from the list and
-    /// reported alongside the connection.
-    async fn reconnect(&self, registrations: &mut Vec<Request>) -> Result<(Conn, Option<String>), String> {
+    /// returned with the Broker's error.
+    async fn reconnect(&self, registrations: &mut Vec<Request>) -> Result<(Conn, Vec<(String, String)>), String> {
         let mut conn = Conn::open(&self.settings).await.map_err(|e| format!("{e:#}"))?;
         let mut refused = Vec::new();
         let mut kept = Vec::new();
         for register in registrations.drain(..) {
             match conn.exchange(&register).await {
                 Ok(Response::Ok { .. }) => kept.push(register),
-                Ok(Response::Err { error }) => refused.push(error),
+                Ok(Response::Err { error }) => {
+                    refused.push((register.session().unwrap_or_default().to_string(), error))
+                }
                 Err(Failure::Lost(e) | Failure::BadReply(e)) => return Err(e),
             }
         }
         *registrations = kept;
-        let refused = (!refused.is_empty())
-            .then(|| format!("the Broker restarted and refused a Session this client had: {}", refused.join("; ")));
         Ok((conn, refused))
     }
 }

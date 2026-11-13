@@ -59,6 +59,8 @@ struct SettingsFile {
     max_message_bytes: Option<usize>,
     max_unread: Option<usize>,
     log_keep: Option<usize>,
+    grace_ms: Option<u64>,
+    codex_command: Option<PathBuf>,
 }
 
 impl Settings {
@@ -71,7 +73,7 @@ impl Settings {
         Ok(Self {
             runtime_dir: runtime_dir()?,
             data_dir: data_dir()?,
-            grace: grace()?,
+            grace: grace(file.grace_ms)?,
             max_message_bytes: limit(
                 ENV_MAX_MESSAGE_BYTES,
                 "max_message_bytes",
@@ -80,7 +82,9 @@ impl Settings {
             )?,
             max_unread: limit(ENV_MAX_UNREAD, "max_unread", file.max_unread, DEFAULT_MAX_UNREAD)?,
             log_keep: limit(ENV_LOG_KEEP, "log_keep", file.log_keep, DEFAULT_LOG_KEEP)?,
-            codex_command: env_path(ENV_CODEX_COMMAND).unwrap_or_else(|| DEFAULT_CODEX_COMMAND.into()),
+            codex_command: env_path(ENV_CODEX_COMMAND)
+                .or(file.codex_command)
+                .unwrap_or_else(|| DEFAULT_CODEX_COMMAND.into()),
         })
     }
 
@@ -147,16 +151,19 @@ fn limit(env_name: &str, file_key: &str, from_file: Option<usize>, default: usiz
 /// Broker could stop before the client that started it connects.
 const MIN_GRACE: Duration = Duration::from_millis(100);
 
-fn grace() -> Result<Duration> {
-    let Some(v) = std::env::var(ENV_GRACE_MS).ok().filter(|v| !v.is_empty()) else {
-        return Ok(DEFAULT_GRACE);
+/// The grace period: [`ENV_GRACE_MS`] if set, else the settings file's
+/// `grace_ms`, else the default.
+fn grace(from_file: Option<u64>) -> Result<Duration> {
+    let (value, source) = match std::env::var(ENV_GRACE_MS).ok().filter(|v| !v.is_empty()) {
+        Some(v) => (v.trim().parse::<u64>().ok(), format!("{ENV_GRACE_MS} (`{v}`)")),
+        None => match from_file {
+            Some(ms) => (Some(ms), "`grace_ms` in the settings file".to_string()),
+            None => return Ok(DEFAULT_GRACE),
+        },
     };
-    match v.parse::<u64>().map(Duration::from_millis) {
-        Ok(grace) if grace >= MIN_GRACE => Ok(grace),
-        _ => bail!(
-            "{ENV_GRACE_MS} must be a whole number of milliseconds, at least {}, got `{v}`",
-            MIN_GRACE.as_millis()
-        ),
+    match value.map(Duration::from_millis) {
+        Some(grace) if grace >= MIN_GRACE => Ok(grace),
+        _ => bail!("{source} must be a whole number of milliseconds, at least {}", MIN_GRACE.as_millis()),
     }
 }
 

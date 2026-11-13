@@ -160,3 +160,46 @@ async fn a_grace_period_too_short_to_start_a_broker_is_refused_naming_the_settin
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PEERPOST_GRACE_MS"), "{stderr}");
 }
+
+#[tokio::test]
+async fn a_codex_session_whose_name_was_taken_during_a_broker_restart_registers_again_and_others_carry_on() {
+    const THREAD_A: &str = "01a1bd9e-a4ad-7d53-8744-7ad65f511b6b";
+    const THREAD_B: &str = "01a1bd9e-a4ad-7f12-9c3e-2e81a40d7c55";
+    /// Ends in the same four hex digits as A.
+    const THREAD_A_CLASH: &str = "01a1bd9f-2011-72d3-a147-104c5e101b6b";
+    let env = TestEnv::new();
+    let first = env.plain_session().await;
+    assert_eq!(codex_who(&first, THREAD_A).await.you(), "codex-1b6b");
+    assert_eq!(codex_who(&first, THREAD_B).await.you(), "codex-7c55");
+
+    let old = env.broker_pids();
+    // SAFETY: sends SIGKILL to the Broker this test started.
+    assert_eq!(unsafe { libc::kill(old[0] as i32, libc::SIGKILL) }, 0);
+    assert!(eventually(Duration::from_secs(5), || env.broker_pids().is_empty()).await);
+
+    // Another MCP server reaches the new Broker first and takes A's name.
+    let second = env.plain_session().await;
+    assert_eq!(codex_who(&second, THREAD_A_CLASH).await.you(), "codex-1b6b");
+
+    let b = codex_who(&first, THREAD_B).await;
+    assert!(!b.is_error, "a refusal for thread A is not thread B's error: {}", b.text);
+    assert_eq!(b.you(), "codex-7c55");
+    let a = codex_who(&first, THREAD_A).await;
+    let a = if a.is_error { codex_who(&first, THREAD_A).await } else { a };
+    assert!(!a.is_error, "thread A registers again under a free name: {}", a.text);
+    assert_eq!(a.you(), "codex-11b6b");
+}
+
+async fn codex_who(session: &common::Session, thread: &str) -> common::ToolOutput {
+    session.call("who", None, Some(serde_json::json!({ "threadId": thread }))).await
+}
+
+#[tokio::test]
+async fn the_grace_period_can_come_from_the_settings_file() {
+    let env = TestEnv::new();
+    env.write_settings_file("grace_ms = 0\n");
+    let out = env.run(&["broker"]).await;
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`grace_ms` in the settings file") && stderr.contains("at least 100"), "{stderr}");
+}

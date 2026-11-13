@@ -6,8 +6,9 @@
 //!
 //! It connects through the same start path as the MCP server, so it starts
 //! the Broker if none runs, and it holds that connection open for as long as
-//! it runs. It registers no Session: it only asks about `recipient`. It ends with status 0 on SIGTERM, SIGINT or SIGHUP,
-//! or when nobody reads its output any more.
+//! it runs. It registers no Session: it only asks about `recipient`. It ends
+//! with status 0 on SIGTERM, SIGINT or SIGHUP, or when nobody reads its
+//! output any more.
 
 use std::io::Write;
 use std::time::Duration;
