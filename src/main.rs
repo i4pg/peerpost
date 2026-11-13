@@ -1,7 +1,7 @@
 //! peerpost: a local message relay for Codex CLI and Claude Code Sessions.
 //!
 //! One binary, several roles chosen by the first argument:
-//! - no argument: the MCP server over stdio (one per Session)
+//! - no argument (or `serve`): the MCP server over stdio (one per Session)
 //! - `broker`: the Broker (normally started on demand, never by hand)
 //! - `prune`: empty the Message log now
 //! - `watch <sender-name>`: the Watcher, run by a Claude Session under Monitor
@@ -23,7 +23,7 @@ const HELP: &str = "\
 peerpost: a local message relay for Codex CLI and Claude Code Sessions
 
 Usage:
-  peerpost                       run the MCP server over stdio (Codex CLI and
+  peerpost [serve]               run the MCP server over stdio (Codex CLI and
                                  Claude Code start this; see the README)
   peerpost watch <sender-name>   the Watcher: wake a Claude Session when Peer
                                  messages wait for it (run under Monitor)
@@ -61,7 +61,9 @@ async fn main() -> Result<()> {
             _ => bail!("usage: peerpost watch <sender-name> (your own Sender name, from any relay tool result)"),
         },
         Some(other) => {
-            bail!("unknown command `{other}`; expected no argument (MCP server), `broker`, `prune` or `watch`; see `peerpost --help`")
+            bail!(
+                "unknown command `{other}`; expected no argument or `serve` (MCP server), `broker`, `prune` or `watch`; see `peerpost --help`"
+            )
         }
     }
 }

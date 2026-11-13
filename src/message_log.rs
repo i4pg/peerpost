@@ -63,6 +63,9 @@ pub struct MessageLog {
     keep: usize,
     /// How many `message` records the file holds, kept or dropped.
     on_disk: usize,
+    /// A write failed partway, so the file may end in a torn line that the
+    /// next write must end first.
+    torn: bool,
 }
 
 impl MessageLog {
@@ -93,7 +96,7 @@ impl MessageLog {
         let next_id = messages.keys().next_back().map_or(next_id, |id| next_id.max(id + 1));
         let mut file = private_fs::open_append(path)?;
         end_with_newline(path, &mut file)?;
-        let mut log = Self { path: path.to_path_buf(), file, messages, next_id, keep, on_disk };
+        let mut log = Self { path: path.to_path_buf(), file, messages, next_id, keep, on_disk, torn: false };
         log.drop_oldest();
         if log.on_disk > log.keep {
             // Apply the count now, also when it was lowered since last run.
@@ -187,6 +190,7 @@ impl MessageLog {
         let file = private_fs::open_append(&tmp)?;
         std::fs::rename(&tmp, &self.path).context("cannot replace the Message log")?;
         self.file = file;
+        self.torn = false;
         self.on_disk = messages.len();
         // Best effort: the new file is already in use, so a failed directory
         // sync must not be reported as a failed rewrite.
@@ -196,21 +200,22 @@ impl MessageLog {
         Ok(())
     }
 
-    /// Return `recipient`'s unread messages, oldest first, and mark them read.
-    /// The read markers are written in one go before anything is marked, so
-    /// a failed write leaves every message unread.
-    pub fn take_unread(&mut self, recipient: &str) -> Result<Vec<PeerMessage>> {
-        let ids: Vec<u64> =
-            self.messages.iter().filter(|(_, m)| !m.read && m.recipient == recipient).map(|(id, _)| *id).collect();
+    /// `recipient`'s unread messages, oldest first. Marks nothing read: the
+    /// Broker calls [`Self::mark_read`] once the messages were handed over.
+    pub fn unread(&self, recipient: &str) -> Vec<PeerMessage> {
+        self.messages.values().filter(|m| !m.read && m.recipient == recipient).map(|m| m.message.clone()).collect()
+    }
+
+    /// Mark the messages `ids` read (ids already read or dropped are
+    /// skipped). The read markers are written in one go before anything is
+    /// marked, so a failed write leaves every message unread.
+    pub fn mark_read(&mut self, ids: &[u64]) -> Result<()> {
+        let ids: Vec<u64> = ids.iter().copied().filter(|id| self.messages.get(id).is_some_and(|m| !m.read)).collect();
         self.write(&ids.iter().map(|&id| Record::Read { id }).collect::<Vec<_>>())?;
-        Ok(ids
-            .iter()
-            .map(|id| {
-                let stored = self.messages.get_mut(id).expect("id just listed");
-                stored.read = true;
-                stored.message.clone()
-            })
-            .collect())
+        for id in ids {
+            self.messages.get_mut(&id).expect("id just checked").read = true;
+        }
+        Ok(())
     }
 
     /// How many unread messages wait for `recipient`, per Sender name, in
@@ -234,9 +239,16 @@ impl MessageLog {
         if records.is_empty() {
             return Ok(());
         }
-        self.file.write_all(lines(records)?.as_bytes()).context("cannot write the Message log")?;
-        self.file.flush()?;
-        Ok(())
+        let lines = lines(records)?;
+        if self.torn {
+            end_with_newline(&self.path, &mut self.file).context("cannot write the Message log")?;
+            self.torn = false;
+        }
+        let written = self.file.write_all(lines.as_bytes()).and_then(|()| self.file.flush());
+        // A partial write leaves a torn line; the next write ends it first,
+        // so a later record is not glued to it and lost on replay.
+        self.torn = written.is_err();
+        written.context("cannot write the Message log")
     }
 }
 

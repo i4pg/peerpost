@@ -38,8 +38,12 @@ const CODEX_THREAD_KEY: &str = "threadId";
 
 /// Every Codex Sender name, and only those, starts with this.
 const CODEX_NAME_PREFIX: &str = "codex-";
+/// An automatic Claude Sender name is this plus four random hex digits.
+const CLAUDE_NAME_PREFIX: &str = "claude-";
 
-/// A Codex Sender name starts with this many hex digits of the thread id.
+/// A Codex Sender name ends with at least this many hex digits from the end
+/// of the thread id. Codex thread ids are UUIDv7: the leading digits are a
+/// timestamp shared by threads started together, the trailing ones random.
 const CODEX_NAME_MIN_HEX: usize = 4;
 
 /// Who is calling, as far as this MCP server can tell.
@@ -90,16 +94,22 @@ impl RelayServer {
     }
 
     /// The Sender name of the Codex Session for `thread`, registering it on
-    /// its first call as `codex-` plus the thread id's first hex digits,
-    /// lengthened until no live Session has that name.
+    /// its first call as `codex-` plus the thread id's last hex digits (its
+    /// random tail), lengthened from the end until no live Session has that
+    /// name.
     async fn codex_session(&self, thread: &CodexThread) -> Result<String, String> {
         let mut sessions = self.codex_sessions.lock().await;
-        if let Some(name) = sessions.get(&thread.id) {
-            return Ok(name.clone());
-        }
         let broker = self.broker.as_ref().map_err(Clone::clone)?;
+        if let Some(name) = sessions.get(&thread.id) {
+            // A restarted Broker may have refused the name (another Session
+            // took it first); then the thread registers again.
+            if broker.is_registered(name).await {
+                return Ok(name.clone());
+            }
+            sessions.remove(&thread.id);
+        }
         let names =
-            (CODEX_NAME_MIN_HEX..=thread.hex.len()).map(|len| format!("{CODEX_NAME_PREFIX}{}", &thread.hex[..len]));
+            (CODEX_NAME_MIN_HEX..=thread.hex.len()).map(|len| format!("{CODEX_NAME_PREFIX}{}", thread.tail(len)));
         let name = register_first_free(broker, names, Some(&thread.id))
             .await
             .map_err(|e| format!("could not register Codex thread {}: {e}", thread.id))?;
@@ -176,6 +186,11 @@ impl CodexThread {
         }
         Ok(Self { id: thread.to_string(), hex })
     }
+
+    /// The last `len` hex digits of the id.
+    fn tail(&self, len: usize) -> &str {
+        &self.hex[self.hex.len() - len..]
+    }
 }
 
 fn is_claude() -> bool {
@@ -195,7 +210,7 @@ async fn register_claude(broker: &BrokerClient) -> Result<String, String> {
         })?;
         return Ok(name);
     }
-    let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("claude-{:04x}", rand::random::<u16>()));
+    let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("{CLAUDE_NAME_PREFIX}{:04x}", rand::random::<u16>()));
     register_first_free(broker, names, None).await.map_err(|e| format!("could not find a free Sender name: {e}"))
 }
 

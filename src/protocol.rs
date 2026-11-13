@@ -36,6 +36,18 @@ pub enum Request {
     Unread { recipient: String },
 }
 
+impl Request {
+    /// The Sender name of the Session this request acts for, if any.
+    pub fn session(&self) -> Option<&str> {
+        match self {
+            Request::Register { session, .. } | Request::Send { session, .. } | Request::Read { session } => {
+                Some(session)
+            }
+            Request::Who | Request::Prune | Request::Unread { .. } => None,
+        }
+    }
+}
+
 /// The end of the Broker's error when a Sender name is already live; a
 /// client that picks names itself tries another name only on this error.
 pub const NAME_TAKEN: &str = "is already used by a live Session";

@@ -12,7 +12,7 @@ peerpost is one binary. Claude Code and Codex CLI start it as an MCP server, and
 
 Messages go through a small local Broker that peerpost starts by itself the first time a Session needs it. The Broker stamps every message with the sending Session's registered Sender name; nothing in a tool's arguments or a message's text can set the sender. A peer's words reach a model only as the output of its own `read` call.
 
-Only one Broker runs at a time, even when several Sessions start at once. It stops by itself 30 seconds after the last Session disconnects; change that with `PEERPOST_GRACE_MS` (milliseconds, at least 100), set where your Sessions start. The next Session starts it again. If the Broker stops or crashes while Sessions are open, they reconnect on their next call under the same Sender names; a `send` or `read` cut off mid-call is reported as an error rather than repeated, so no Peer message is sent twice or lost.
+Only one Broker runs at a time, even when several Sessions start at once. It stops by itself 30 seconds after the last Session disconnects; change that with `grace_ms` (see [Settings](#settings)). The next Session starts it again. If the Broker stops or crashes while Sessions are open, they reconnect on their next call under the same Sender names; a `send` or `read` cut off mid-call is reported as an error rather than repeated, so no Peer message is sent twice. A `read` marks its messages read only after its reply has gone out, so a reply lost to a broken connection leaves them unread for the next `read`.
 
 A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` (for example `RELAY_NAME=review claude`), otherwise `claude-` plus four random hex digits. Every tool result tells the calling Session its own Sender name.
 
@@ -112,7 +112,7 @@ Forward `XDG_RUNTIME_DIR`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME` if you set them
 
 ## Codex Sessions
 
-Codex CLI may run one peerpost MCP server for many Codex Sessions at once, so peerpost tells Codex Sessions apart on every tool call by the thread id Codex puts in the call's `_meta.threadId`. The first relay tool call from a thread registers it as a Session named `codex-` plus the first four hex digits of its thread id, lengthened until no live Session has that name. Codex thread ids start with a timestamp, so threads started close together share their first digits and later ones get longer names (such as `codex-01a1b`). Names starting with `codex-` are kept for Codex Sessions, so `RELAY_NAME` cannot use them.
+Codex CLI may run one peerpost MCP server for many Codex Sessions at once, so peerpost tells Codex Sessions apart on every tool call by the thread id Codex puts in the call's `_meta.threadId`. The first relay tool call from a thread registers it as a Session named `codex-` plus the last four hex digits of its thread id (such as `codex-1b6b`), lengthened from the end until no live Session has that name. Codex thread ids start with a timestamp and end with random digits, so threads started close together still get short, distinct names; only a chance clash on the last four digits gives a longer one. Names starting with `codex-` are kept for Codex Sessions, so `RELAY_NAME` cannot use them.
 
 `_meta.threadId` is **undocumented**: Codex defines it in its open-source code (`codex-rs/core/src/mcp_tool_call.rs`), not in its docs, and may change it without notice (ADR 0006). A tool call that is not from Claude Code and carries no `_meta.threadId` is refused with an error; peerpost never guesses which Session is calling.
 
@@ -130,7 +130,7 @@ codex queue --thread <thread id> --message "[relay] N new peer messages waiting;
 
 where N is how many Peer messages wait for that Session. The Nudge never carries message text or a Sender name; the messages themselves reach Codex only as the output of its own `read` call. `codex queue` delivers its line as if you had typed it, with no sender field, so the "from the relay, not the human" wording and the AGENTS.md snippet (which tells Codex a Nudge is never your approval) are guidance to the model, not an enforced label (ADR 0005).
 
-The Broker runs `codex` from your `PATH`; set `PEERPOST_CODEX_COMMAND` to the path of another `codex` program, where your Sessions start. A failed Nudge is written to the broker log in the runtime directory and never fails the `send`: the message still waits for `read`.
+The Broker runs `codex` from your `PATH`; set `codex_command` (see [Settings](#settings)) to the path of another `codex` program. A failed Nudge is written to the broker log in the runtime directory and never fails the `send`: the message still waits for `read`.
 
 A Nudge waits for you, and the Codex Session does not wake until you act, when:
 
@@ -156,6 +156,8 @@ Settings come from the settings file `config.toml` in your config directory (`$X
 | `max_message_bytes` | `PEERPOST_MAX_MESSAGE_BYTES` | `65536` (64 KB) | Largest Peer message text, in bytes |
 | `max_unread` | `PEERPOST_MAX_UNREAD` | `100` | Most unread Peer messages one Recipient may hold |
 | `log_keep` | `PEERPOST_LOG_KEEP` | `10000` | How many of the newest Peer messages the Message log keeps |
+| `grace_ms` | `PEERPOST_GRACE_MS` | `30000` (30 s) | How long the Broker keeps running with no client connected, in milliseconds (at least 100) |
+| `codex_command` | `PEERPOST_CODEX_COMMAND` | `codex` (from `PATH`) | The `codex` program a Nudge runs |
 
 ```toml
 # ~/.config/peerpost/config.toml

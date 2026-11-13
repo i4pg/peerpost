@@ -184,6 +184,14 @@ async fn serve_connection(stream: UnixStream, client: Client) {
         if write_half.write_all(out.as_bytes()).await.is_err() {
             break;
         }
+        // A `read` marks its messages read only once its reply went out, so
+        // a reply lost on a broken connection leaves them unread.
+        if let Response::Ok { ok: Reply::Messages(messages) } = &response {
+            let ids: Vec<u64> = messages.iter().map(|m| m.id).collect();
+            if let Err(e) = state.lock().expect("broker state poisoned").log.mark_read(&ids) {
+                eprintln!("peerpost broker: cannot mark Peer messages read; they will be read again: {e:#}");
+            }
+        }
     }
 }
 
@@ -201,7 +209,7 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
                 return Err(format!("the Sender name `{session}` {NAME_TAKEN}"));
             }
             if let Some(thread) = &codex_thread {
-                // One Session per Codex thread, so a Nudge has one target.
+                // One Session per Codex thread, so a Nudge reaches one Codex Session.
                 if let Some((name, _)) = state.sessions.iter().find(|(_, s)| s.codex_thread.as_ref() == Some(thread)) {
                     return Err(format!("Codex thread {thread} is already live as `{name}` on another connection"));
                 }
@@ -245,8 +253,7 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
         }
         Request::Read { session } => {
             check_owner(state, conn, &session)?;
-            let messages = state.log.take_unread(&session).map_err(|e| format!("{e:#}"))?;
-            Ok(Reply::Messages(messages))
+            Ok(Reply::Messages(state.log.unread(&session)))
         }
         Request::Prune => {
             let removed = state.log.clear().map_err(|e| format!("{e:#}"))?;
