@@ -116,7 +116,9 @@ fn is_claude() -> bool {
 /// Register under `RELAY_NAME` if set, else a free `claude-<4 hex>`.
 async fn register_claude(broker: &BrokerClient) -> Result<String, String> {
     if let Some(name) = std::env::var("RELAY_NAME").ok().filter(|n| !n.is_empty()) {
-        broker.request(&Request::Register { session: name.clone() }).await?;
+        broker.request(&Request::Register { session: name.clone() }).await.map_err(|e| {
+            format!("cannot register this Session as RELAY_NAME `{name}`: {e}; restart it with another RELAY_NAME")
+        })?;
         return Ok(name);
     }
     let mut last_error = String::new();

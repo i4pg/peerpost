@@ -14,6 +14,33 @@ Messages go through a small local Broker that peerpost starts by itself the firs
 
 A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` (for example `RELAY_NAME=review claude`), otherwise `claude-` plus four random hex digits. Every tool result tells the calling Session its own Sender name.
 
+## Limits and errors
+
+`send` returns a tool error, and stores nothing, when:
+
+- the Recipient is not a live Session (`unknown recipient`; `who` lists the live ones);
+- the text is larger than the message size limit, 64 KB by default (`message too large`);
+- the Recipient already holds the unread limit, 100 Peer messages by default (`recipient is full`); it takes messages again once it calls `read`.
+
+A Session that asks for a Sender name another live Session already holds (for example two Sessions started with the same `RELAY_NAME`) is refused, and every tool call it makes returns that error.
+
+## Settings
+
+Settings come from the settings file `config.toml` in your config directory (`$XDG_CONFIG_HOME/peerpost/config.toml`, else `~/.config/peerpost/config.toml`) and from environment variables. An environment variable wins over the file; a missing file means the defaults.
+
+| Settings file key | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `max_message_bytes` | `PEERPOST_MAX_MESSAGE_BYTES` | `65536` (64 KB) | Largest Peer message text, in bytes |
+| `max_unread` | `PEERPOST_MAX_UNREAD` | `100` | Most unread Peer messages one Recipient may hold |
+
+```toml
+# ~/.config/peerpost/config.toml
+max_message_bytes = 32768
+max_unread = 50
+```
+
+Both limits must be whole numbers of at least 1; a bad value or an unknown key stops peerpost with an error naming it. The limits are enforced by the Broker, which reads them when it starts, so a change takes effect the next time the Broker starts.
+
 ## Where it keeps things
 
 - Runtime directory (the Broker's socket and its log): `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else `peerpost-<your uid>` in the system temp directory.
