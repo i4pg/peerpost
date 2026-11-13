@@ -31,6 +31,20 @@ A Codex Session can receive Peer messages once it has made one relay tool call, 
 
 Both directories are mode 0700 and every file in them 0600. peerpost refuses to use an existing directory that other users can reach or that another user owns.
 
+## The Message log
+
+The Message log is `messages.jsonl` in the data directory above: one JSON line per Peer message (with its text) and one per message read. Unread messages survive the Broker stopping and starting again.
+
+It keeps only the newest 10,000 Peer messages, read or unread; older ones are dropped automatically, so private text does not pile up. Change the count with `PEERPOST_LOG_KEEP` (a whole number of at least 1), set where your Sessions start. A dropped message can no longer be read. The file is rewritten without dropped messages once it holds a tenth more than the count, so it never holds much more than that.
+
+To empty the Message log now, read and unread messages alike, run:
+
+```sh
+peerpost prune
+```
+
+It asks the running Broker to empty the log (starting one if none runs), so it is safe to run while Sessions are live.
+
 ## Trust boundary
 
 Only processes running as your OS user can reach the Broker: its socket and Message log are private to you. That is the whole boundary. peerpost issues no per-Session secrets, because processes running as one OS user can usually read each other's files and settings, so a token would promise isolation it cannot keep.
