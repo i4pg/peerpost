@@ -164,16 +164,34 @@ fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else
-/// `<temp dir>/peerpost-<uid>`.
+/// `$PEERPOST_RUNTIME_DIR`, else [`default_runtime_dir`].
 fn runtime_dir() -> Result<PathBuf> {
     if let Some(dir) = env_path(ENV_RUNTIME_DIR) {
         return Ok(dir);
     }
-    if let Some(dir) = env_path("XDG_RUNTIME_DIR") {
-        return Ok(dir.join("peerpost"));
+    let uid = crate::private_fs::current_uid();
+    let systemd = PathBuf::from(format!("/run/user/{uid}"));
+    let systemd = systemd.is_dir().then_some(systemd);
+    Ok(default_runtime_dir(env_path("XDG_RUNTIME_DIR"), systemd, &std::env::temp_dir(), uid))
+}
+
+/// `$XDG_RUNTIME_DIR/peerpost`, else `/run/user/<uid>/peerpost` when that
+/// directory exists, else `<temp dir>/peerpost-<uid>`.
+///
+/// The middle step matters: Codex CLI starts MCP servers with only a few
+/// environment variables, never `XDG_RUNTIME_DIR`, while Claude Code passes
+/// it on. On a systemd system it is `/run/user/<uid>`, so both still meet at
+/// one Broker.
+fn default_runtime_dir(
+    xdg_runtime_dir: Option<PathBuf>,
+    systemd_user_dir: Option<PathBuf>,
+    temp_dir: &Path,
+    uid: u32,
+) -> PathBuf {
+    match xdg_runtime_dir.or(systemd_user_dir) {
+        Some(dir) => dir.join("peerpost"),
+        None => temp_dir.join(format!("peerpost-{uid}")),
     }
-    Ok(std::env::temp_dir().join(format!("peerpost-{}", crate::private_fs::current_uid())))
 }
 
 /// `$PEERPOST_DATA_DIR`, else `$XDG_DATA_HOME/peerpost`, else
@@ -187,4 +205,33 @@ fn data_dir() -> Result<PathBuf> {
     }
     let home = env_path("HOME").context("cannot find a data directory: set HOME or PEERPOST_DATA_DIR")?;
     Ok(home.join(".local").join("share").join("peerpost"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Codex CLI starts MCP servers with only a few environment variables
+    // (not XDG_RUNTIME_DIR), while Claude Code passes them all; both must
+    // still find the one Broker. Not testable at Seam 1 without touching
+    // the real /run/user directory, so the choice is tested here.
+    #[test]
+    fn a_session_without_xdg_runtime_dir_finds_the_same_runtime_dir_on_a_systemd_system() {
+        let run_user = PathBuf::from("/run/user/1000");
+        let tmp = PathBuf::from("/tmp");
+        let claude = default_runtime_dir(Some(run_user.clone()), Some(run_user.clone()), &tmp, 1000);
+        let codex = default_runtime_dir(None, Some(run_user.clone()), &tmp, 1000);
+        assert_eq!(claude, PathBuf::from("/run/user/1000/peerpost"));
+        assert_eq!(codex, claude);
+    }
+
+    #[test]
+    fn xdg_runtime_dir_wins_and_the_temp_dir_is_the_last_resort() {
+        let tmp = PathBuf::from("/tmp");
+        assert_eq!(
+            default_runtime_dir(Some("/custom".into()), Some("/run/user/7".into()), &tmp, 7),
+            PathBuf::from("/custom/peerpost")
+        );
+        assert_eq!(default_runtime_dir(None, None, &tmp, 7), PathBuf::from("/tmp/peerpost-7"));
+    }
 }

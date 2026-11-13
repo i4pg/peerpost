@@ -5,6 +5,7 @@
 //! - `broker`: the Broker (normally started on demand, never by hand)
 //! - `prune`: empty the Message log now
 //! - `watch <sender-name>`: the Watcher, run by a Claude Session under Monitor
+//! - `--version`, `--help`: answered before settings are read
 
 mod broker;
 mod client;
@@ -18,10 +19,39 @@ mod watch;
 
 use anyhow::{bail, Result};
 
+const HELP: &str = "\
+peerpost: a local message relay for Codex CLI and Claude Code Sessions
+
+Usage:
+  peerpost                       run the MCP server over stdio (Codex CLI and
+                                 Claude Code start this; see the README)
+  peerpost watch <sender-name>   the Watcher: wake a Claude Session when Peer
+                                 messages wait for it (run under Monitor)
+  peerpost prune                 empty the Message log now
+  peerpost --version             print the version
+  peerpost --help                print this help
+
+Setup:
+  codex mcp add peerpost -- peerpost
+  claude mcp add --scope user peerpost -- peerpost
+";
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let settings = settings::Settings::from_env()?;
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Answered before reading settings, so a bad settings file never hides them.
+    match args.first().map(String::as_str) {
+        Some("--version" | "-V") => {
+            println!("peerpost {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h" | "help") => {
+            print!("{HELP}");
+            return Ok(());
+        }
+        _ => {}
+    }
+    let settings = settings::Settings::from_env()?;
     match args.first().map(String::as_str) {
         None | Some("serve") => mcp::serve_stdio(settings).await,
         Some("broker") => broker::run(settings).await,
@@ -31,7 +61,7 @@ async fn main() -> Result<()> {
             _ => bail!("usage: peerpost watch <sender-name> (your own Sender name, from any relay tool result)"),
         },
         Some(other) => {
-            bail!("unknown command `{other}`; expected no argument (MCP server), `broker`, `prune` or `watch`")
+            bail!("unknown command `{other}`; expected no argument (MCP server), `broker`, `prune` or `watch`; see `peerpost --help`")
         }
     }
 }

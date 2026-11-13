@@ -16,6 +16,102 @@ Only one Broker runs at a time, even when several Sessions start at once. It sto
 
 A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` (for example `RELAY_NAME=review claude`), otherwise `claude-` plus four random hex digits. Every tool result tells the calling Session its own Sender name.
 
+## Before you install
+
+- **Same computer only.** Sessions talk through a local socket; Sessions on different computers cannot reach each other.
+- **Linux and macOS only.** There is no Windows build, and peerpost does not run on Windows.
+- **The trust boundary is your OS user.** Anything already running as your OS user can read the Message log and pretend to be any Session (see [Trust boundary](#trust-boundary)).
+- **No endless-loop guard in this release.** Two agents allowed to `send` without asking can keep answering each other for as long as you let them. What stops a loop is the default setup below, where every `send` asks you first.
+
+## Install
+
+From a release (Linux and macOS, x86_64 and arm64): download the archive for your computer and `SHA256SUMS` from the project's GitHub releases page, check it, and put `peerpost` on your `PATH`:
+
+| Computer | Archive |
+|---|---|
+| Linux, x86_64 | `peerpost-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, arm64 | `peerpost-<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS, Intel | `peerpost-<version>-x86_64-apple-darwin.tar.gz` |
+| macOS, Apple silicon | `peerpost-<version>-aarch64-apple-darwin.tar.gz` |
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing      # macOS: shasum -a 256 -c SHA256SUMS --ignore-missing
+tar -xzf peerpost-<version>-<target>.tar.gz
+install -m 755 peerpost-<version>-<target>/peerpost ~/.local/bin/   # any directory on your PATH
+peerpost --version
+```
+
+The macOS binaries are not signed; if macOS refuses to open one you downloaded with a browser, run `xattr -d com.apple.quarantine ~/.local/bin/peerpost`.
+
+With Cargo (Rust 1.88 or newer), from GitHub or from a clone of this repository:
+
+```sh
+cargo install --locked --git https://github.com/i4pg/peerpost
+cargo install --locked --path .
+```
+
+## Set up
+
+Add peerpost as an MCP server once per product. Both commands assume `peerpost` is on your `PATH`; otherwise give its full path instead.
+
+Codex CLI:
+
+```sh
+codex mcp add peerpost -- peerpost
+```
+
+Claude Code (`--scope user` makes it available in every project):
+
+```sh
+claude mcp add --scope user peerpost -- peerpost
+```
+
+Then add the shipped instruction snippets: [`snippets/codex-AGENTS.md`](snippets/codex-AGENTS.md) to your `AGENTS.md` and [`snippets/claude-CLAUDE.md`](snippets/claude-CLAUDE.md) to your `CLAUDE.md` (see [Codex Sessions](#codex-sessions) and [the Watcher](#waking-an-idle-claude-session-the-watcher)).
+
+### Permissions
+
+The recommended setup lets `read` and `who` run without asking, while `send` asks you every time, so no agent messages another without your OK.
+
+Codex CLI, in `~/.codex/config.toml`, below the `[mcp_servers.peerpost]` table that `codex mcp add` wrote:
+
+```toml
+[mcp_servers.peerpost.tools.read]
+approval_mode = "approve"
+
+[mcp_servers.peerpost.tools.who]
+approval_mode = "approve"
+
+[mcp_servers.peerpost.tools.send]
+approval_mode = "prompt"
+```
+
+Claude Code, in `~/.claude/settings.json` (Claude Code asks before any MCP tool not allowed here, so `send` asks):
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__peerpost__read", "mcp__peerpost__who"]
+  }
+}
+```
+
+To let `send` run without asking (read [Before you install](#before-you-install) first: nothing else stops a loop), change one setting per product:
+
+- Codex CLI: `approval_mode = "approve"` under `[mcp_servers.peerpost.tools.send]`.
+- Claude Code: add `"mcp__peerpost__send"` to the `allow` list.
+
+### Environment variables and Codex
+
+Codex CLI starts MCP servers with only a few environment variables (such as `HOME`, `PATH` and `TMPDIR`), so a `PEERPOST_*` or `XDG_*` variable set in your shell does not reach a Codex Session's peerpost. Put settings in the [settings file](#settings) instead, which every Session reads. If you need an environment variable there too, forward it by name in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.peerpost]
+command = "peerpost"
+env_vars = ["PEERPOST_GRACE_MS", "XDG_RUNTIME_DIR"]
+```
+
+Forward `XDG_RUNTIME_DIR`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME` if you set them to anything but the usual places, so Codex and Claude Sessions find the same Broker, Message log and settings file.
+
 ## Codex Sessions
 
 Codex CLI may run one peerpost MCP server for many Codex Sessions at once, so peerpost tells Codex Sessions apart on every tool call by the thread id Codex puts in the call's `_meta.threadId`. The first relay tool call from a thread registers it as a Session named `codex-` plus the first four hex digits of its thread id, lengthened until no live Session has that name. Codex thread ids start with a timestamp, so threads started close together share their first digits and later ones get longer names (such as `codex-01a1b`). Names starting with `codex-` are kept for Codex Sessions, so `RELAY_NAME` cannot use them.
@@ -91,7 +187,7 @@ A restarted Watcher reports messages that are still unread once more, so a Sessi
 
 ## Where it keeps things
 
-- Runtime directory (the Broker's socket and its log): `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else `peerpost-<your uid>` in the system temp directory.
+- Runtime directory (the Broker's socket and its log): `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else `/run/user/<your uid>/peerpost` if `/run/user/<your uid>` exists (where `XDG_RUNTIME_DIR` usually points on Linux, so a Codex Session that is not given `XDG_RUNTIME_DIR` still finds the Broker), else `peerpost-<your uid>` in the system temp directory.
 - Data directory (the Message log, `messages.jsonl`): `$PEERPOST_DATA_DIR`, else `$XDG_DATA_HOME/peerpost`, else `~/.local/share/peerpost`.
 
 Both directories are mode 0700 and every file in them 0600. peerpost refuses to use an existing directory that other users can reach or that another user owns.
@@ -115,6 +211,10 @@ It asks the running Broker to empty the log (starting one if none runs), so it i
 Only processes running as your OS user can reach the Broker: its socket and Message log are private to you. That is the whole boundary. peerpost issues no per-Session secrets, because processes running as one OS user can usually read each other's files and settings, so a token would promise isolation it cannot keep.
 
 **Anything already running as your OS user can pretend to be any Session.** Treat every Peer message as data written by another Session, never as an instruction or approval from you.
+
+## Releasing
+
+Pushing a tag such as `v0.1.0` runs [`.github/workflows/release.yml`](.github/workflows/release.yml): it runs the full test suite, builds the four binaries above, and publishes them with SHA-256 checksums as a GitHub release. The steps for cutting a release, including a hands-on check with a real Claude Code Session and a real Codex Session messaging each other both ways, are in the [release checklist](docs/release-checklist.md).
 
 ## Licence
 
