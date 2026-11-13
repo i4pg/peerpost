@@ -4,6 +4,7 @@
 //! - no argument: the MCP server over stdio (one per Session)
 //! - `broker`: the Broker (normally started on demand, never by hand)
 //! - `prune`: empty the Message log now
+//! - `watch <sender-name>`: the Watcher, run by a Claude Session under Monitor
 
 mod broker;
 mod client;
@@ -12,6 +13,7 @@ mod message_log;
 mod private_fs;
 mod protocol;
 mod settings;
+mod watch;
 
 use anyhow::{bail, Result};
 
@@ -23,7 +25,13 @@ async fn main() -> Result<()> {
         None | Some("serve") => mcp::serve_stdio(settings).await,
         Some("broker") => broker::run(settings).await,
         Some("prune") => prune(settings).await,
-        Some(other) => bail!("unknown command `{other}`; expected no argument (MCP server), `broker` or `prune`"),
+        Some("watch") => match args.get(1..).unwrap_or_default() {
+            [name] if !name.is_empty() => watch::run(settings, name).await,
+            _ => bail!("usage: peerpost watch <sender-name> (your own Sender name, from any relay tool result)"),
+        },
+        Some(other) => {
+            bail!("unknown command `{other}`; expected no argument (MCP server), `broker`, `prune` or `watch`")
+        }
     }
 }
 

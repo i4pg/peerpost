@@ -24,6 +24,10 @@ pub enum Request {
     /// Empty the Message log now, read and unread alike (`peerpost prune`).
     /// Acts for no Session; anyone who can reach the socket may ask.
     Prune,
+    /// How many unread Peer messages wait for `recipient`, per Sender name
+    /// (for the Watcher). Never returns text and marks nothing read. Acts
+    /// for no Session: the Watcher names the Session it watches.
+    Unread { recipient: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,6 +45,15 @@ pub enum Reply {
     Accepted { id: u64 },
     Messages(Vec<PeerMessage>),
     Pruned { removed: usize },
+    Unread(Vec<UnreadCount>),
+}
+
+/// How many unread Peer messages one Sender name has waiting for a
+/// Recipient. Carries no text.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnreadCount {
+    pub sender: String,
+    pub count: usize,
 }
 
 /// A Peer message as handed to its Recipient.
