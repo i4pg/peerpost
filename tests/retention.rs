@@ -9,7 +9,7 @@ fn texts(read: &serde_json::Value) -> Vec<String> {
     read["messages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap().to_string()).collect()
 }
 
-/// Stop a Broker the test started (as a crash would) and wait until it is gone.
+/// Stop a Broker the test started, as a crash would (`kill` waits for it).
 async fn stop(mut broker: tokio::process::Child) {
     broker.kill().await.expect("kill broker");
 }
@@ -88,7 +88,7 @@ async fn prune_empties_the_message_log_of_a_running_broker_which_keeps_working()
     let out = env.run(&["prune"]).await;
     assert!(out.status.success(), "prune failed: {}", String::from_utf8_lossy(&out.stderr));
     let said = String::from_utf8_lossy(&out.stdout);
-    assert!(said.contains("2"), "prune says how many messages it removed: {said}");
+    assert!(said.contains("2 Peer messages removed"), "prune says how many messages it removed: {said}");
 
     assert_eq!(texts(&bob.read().await.ok()), Vec::<String>::new());
     assert!(!std::fs::read_to_string(env.message_log()).unwrap().contains("private"), "text left on disk");
@@ -114,4 +114,38 @@ async fn prune_empties_the_message_log_when_no_broker_is_running() {
 
     let bob = env.claude_session(Some("bob")).await;
     assert_eq!(texts(&bob.read().await.ok()), Vec::<String>::new(), "pruned messages never come back");
+}
+
+#[tokio::test]
+async fn the_message_log_file_never_holds_much_more_than_the_set_count() {
+    let mut env = TestEnv::new();
+    env.set_var("PEERPOST_LOG_KEEP", "20");
+    let alice = env.claude_session(Some("alice")).await;
+    let _bob = env.claude_session(Some("bob")).await;
+    for n in 1..=50 {
+        alice.send("bob", &format!("numbered message {n}")).await.ok();
+        let on_disk = std::fs::read_to_string(env.message_log()).unwrap().matches("numbered message").count();
+        assert!(
+            on_disk <= 22,
+            "after {n} sends the file holds {on_disk} messages; the README promises at most a tenth over 20"
+        );
+    }
+}
+
+#[tokio::test]
+async fn message_ids_keep_rising_across_a_prune_and_a_restart() {
+    let env = TestEnv::new();
+    let broker = env.start_broker().await;
+    let alice = env.claude_session(Some("alice")).await;
+    let bob = env.claude_session(Some("bob")).await;
+    let first = alice.send("bob", "before").await.ok()["id"].as_u64().unwrap();
+    assert!(env.run(&["prune"]).await.status.success());
+    alice.close().await;
+    bob.close().await;
+    stop(broker).await;
+
+    let alice = env.claude_session(Some("alice")).await;
+    let _bob = env.claude_session(Some("bob")).await;
+    let later = alice.send("bob", "after").await.ok()["id"].as_u64().unwrap();
+    assert!(later > first, "id {later} was handed out again after id {first}");
 }
