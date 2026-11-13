@@ -190,7 +190,9 @@ async fn register_claude(broker: &BrokerClient) -> Result<String, String> {
                 "RELAY_NAME `{name}` starts with `{CODEX_NAME_PREFIX}`, which only Codex Sessions use; pick another name"
             ));
         }
-        broker.request(&Request::Register { session: name.clone(), codex_thread: None }).await?;
+        broker.request(&Request::Register { session: name.clone(), codex_thread: None }).await.map_err(|e| {
+            format!("cannot register this Session as RELAY_NAME `{name}`: {e}; restart it with another RELAY_NAME")
+        })?;
         return Ok(name);
     }
     let names = (0..AUTO_NAME_ATTEMPTS).map(|_| format!("claude-{:04x}", rand::random::<u16>()));

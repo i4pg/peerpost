@@ -24,6 +24,34 @@ Tested Codex CLI versions: `0.167.0`
 
 A Codex Session can receive Peer messages once it has made one relay tool call, and stays live while Codex keeps its MCP connection open. Add [`snippets/codex-AGENTS.md`](snippets/codex-AGENTS.md) to your `AGENTS.md` so Codex calls `who` at the start of every session.
 
+## Limits and errors
+
+`send` returns a tool error, and stores nothing, when:
+
+- the Recipient is not a live Session (`unknown recipient`; `who` lists the live ones);
+- the text is larger than the message size limit, 64 KB by default (`message too large`);
+- the Recipient already holds the unread limit, 100 Peer messages by default (`recipient is full`); it takes messages again once it calls `read`.
+
+A Session that asks for a Sender name another live Session already holds (for example two Sessions started with the same `RELAY_NAME`) is refused, and every tool call it makes returns that error.
+
+## Settings
+
+Settings come from the settings file `config.toml` in your config directory (`$XDG_CONFIG_HOME/peerpost/config.toml`, else `~/.config/peerpost/config.toml`) and from environment variables. An environment variable wins over the file; a missing file means the defaults.
+
+| Settings file key | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `max_message_bytes` | `PEERPOST_MAX_MESSAGE_BYTES` | `65536` (64 KB) | Largest Peer message text, in bytes |
+| `max_unread` | `PEERPOST_MAX_UNREAD` | `100` | Most unread Peer messages one Recipient may hold |
+| `log_keep` | `PEERPOST_LOG_KEEP` | `10000` | How many of the newest Peer messages the Message log keeps |
+
+```toml
+# ~/.config/peerpost/config.toml
+max_message_bytes = 32768
+max_unread = 50
+```
+
+Each value must be a whole number of at least 1; a bad value or an unknown key stops peerpost with an error naming it. The Broker reads these settings when it starts, from its settings file and from the environment of the Session that started it, so a change takes effect the next time the Broker starts.
+
 ## Where it keeps things
 
 - Runtime directory (the Broker's socket and its log): `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else `peerpost-<your uid>` in the system temp directory.
@@ -35,7 +63,7 @@ Both directories are mode 0700 and every file in them 0600. peerpost refuses to 
 
 The Message log is `messages.jsonl` in the data directory above: one JSON line per Peer message (with its text) and one per message read. Unread messages survive the Broker stopping and starting again.
 
-It keeps only the newest 10,000 Peer messages, read or unread; older ones are dropped automatically, so private text does not pile up. Change the count with `PEERPOST_LOG_KEEP` (a whole number of at least 1), set where your Sessions start. A dropped message can no longer be read. The file is rewritten without dropped messages once it holds a tenth more than the count, so it never holds much more than that.
+It keeps only the newest 10,000 Peer messages, read or unread; older ones are dropped automatically, so private text does not pile up. Change the count with the `log_keep` setting or `PEERPOST_LOG_KEEP` (see [Settings](#settings)). A dropped message can no longer be read. The file is rewritten without dropped messages once it holds a tenth more than the count, so it never holds much more than that.
 
 To empty the Message log now, read and unread messages alike, run:
 

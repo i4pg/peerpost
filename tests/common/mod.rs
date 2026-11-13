@@ -17,7 +17,16 @@ use tokio::process::Command;
 /// Environment variables a test may set on a spawned peerpost process.
 /// Everything from the outer environment that could change peerpost's
 /// behaviour is removed first, so tests are hermetic.
-const SCRUBBED_VARS: &[&str] = &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_LOG_KEEP"];
+const SCRUBBED_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "RELAY_NAME",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "PEERPOST_LOG_KEEP",
+    "PEERPOST_MAX_MESSAGE_BYTES",
+    "PEERPOST_MAX_UNREAD",
+];
 
 /// A private runtime and data directory; every Session and Broker started
 /// from one `TestEnv` shares them. Dropping it removes both, which also makes
@@ -39,6 +48,19 @@ impl TestEnv {
         self.vars.push((name.into(), value.into()));
     }
 
+    /// The OS user's config directory as peerpost sees it
+    /// (`$XDG_CONFIG_HOME`); empty unless a test writes into it.
+    pub fn config_home(&self) -> PathBuf {
+        self.root.path().join("config")
+    }
+
+    /// Write peerpost's settings file (`<config home>/peerpost/config.toml`).
+    pub fn write_settings_file(&self, contents: &str) {
+        let dir = self.config_home().join("peerpost");
+        std::fs::create_dir_all(&dir).expect("create config dir");
+        std::fs::write(dir.join("config.toml"), contents).expect("write settings file");
+    }
+
     /// The runtime directory peerpost is told to use (created by peerpost).
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.path().join("run")
@@ -58,6 +80,7 @@ impl TestEnv {
         }
         cmd.env("PEERPOST_RUNTIME_DIR", self.runtime_dir());
         cmd.env("PEERPOST_DATA_DIR", self.data_dir());
+        cmd.env("XDG_CONFIG_HOME", self.config_home());
         for (name, value) in &self.vars {
             cmd.env(name, value);
         }

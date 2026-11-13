@@ -129,6 +129,11 @@ impl MessageLog {
         Ok(id)
     }
 
+    /// How many messages `recipient` has not read yet.
+    pub fn unread_count(&self, recipient: &str) -> usize {
+        self.messages.values().filter(|m| !m.read && m.recipient == recipient).count()
+    }
+
     /// Drop every message, read or not, from memory and from the file.
     /// Returns how many were dropped.
     pub fn clear(&mut self) -> Result<usize> {

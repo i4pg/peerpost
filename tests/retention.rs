@@ -50,6 +50,19 @@ async fn past_the_set_count_the_oldest_messages_are_dropped_from_the_message_log
 }
 
 #[tokio::test]
+async fn the_retention_count_can_be_set_in_the_settings_file() {
+    let env = TestEnv::new();
+    env.write_settings_file("log_keep = 2\n");
+    let alice = env.claude_session(Some("alice")).await;
+    let bob = env.claude_session(Some("bob")).await;
+    for n in 1..=4 {
+        alice.send("bob", &format!("message {n}")).await.ok();
+    }
+
+    assert_eq!(texts(&bob.read().await.ok()), ["message 3", "message 4"]);
+}
+
+#[tokio::test]
 async fn the_oldest_messages_stay_dropped_after_a_restart() {
     let mut env = TestEnv::new();
     env.set_var("PEERPOST_LOG_KEEP", "2");

@@ -26,6 +26,8 @@ struct State {
     log: MessageLog,
     /// Live Sessions by Sender name.
     sessions: HashMap<String, LiveSession>,
+    max_message_bytes: usize,
+    max_unread: usize,
 }
 
 struct LiveSession {
@@ -52,6 +54,8 @@ pub async fn run(settings: Settings) -> Result<()> {
     let state = Arc::new(Mutex::new(State {
         log: MessageLog::open(&settings.message_log_path(), settings.log_keep)?,
         sessions: HashMap::new(),
+        max_message_bytes: settings.max_message_bytes,
+        max_unread: settings.max_unread,
     }));
 
     let mut next_conn: ConnId = 0;
@@ -132,6 +136,26 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
         }
         Request::Send { session, recipient, text } => {
             check_owner(state, conn, &session)?;
+            if !state.sessions.contains_key(&recipient) {
+                return Err(format!(
+                    "unknown recipient: `{recipient}` is not a live Session; nothing was sent (call `who` for live \
+                     Sender names)"
+                ));
+            }
+            if text.len() > state.max_message_bytes {
+                return Err(format!(
+                    "message too large: {} bytes, the limit is {} bytes; nothing was sent",
+                    text.len(),
+                    state.max_message_bytes
+                ));
+            }
+            if state.log.unread_count(&recipient) >= state.max_unread {
+                return Err(format!(
+                    "recipient is full: `{recipient}` already holds {} unread Peer messages, the limit; \
+                     nothing was sent, try again after it reads",
+                    state.max_unread
+                ));
+            }
             let id = state.log.append(&session, &recipient, &text).map_err(|e| format!("{e:#}"))?;
             Ok(Reply::Accepted { id })
         }
