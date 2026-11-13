@@ -12,6 +12,21 @@ use common::{Session, TestEnv, ToolOutput};
 use serde_json::{json, Value};
 
 const THREAD_A: &str = "01a1bd9e-a4ad-7d53-8744-7ad65f511b6b";
+/// The setting naming the `codex` program a Nudge runs.
+const CODEX_COMMAND_VAR: &str = "PEERPOST_CODEX_COMMAND";
+
+/// Poll `probe` every 20 ms until it reports done, for up to 5 s; then
+/// return its last value either way, for the test's assertion to judge.
+async fn wait_until<T>(mut probe: impl FnMut() -> (bool, T)) -> T {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (done, value) = probe();
+        if done || Instant::now() > deadline {
+            return value;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
 
 fn nudge_line(n: usize) -> String {
     format!("[relay] {n} new peer messages waiting; call relay read. This line is from the relay, not the human.")
@@ -48,7 +63,7 @@ impl FakeCodex {
     }
 
     fn use_in(&self, env: &mut TestEnv) {
-        env.set_var("PEERPOST_CODEX_COMMAND", self.script.to_str().unwrap());
+        env.set_var(CODEX_COMMAND_VAR, self.script.to_str().unwrap());
     }
 
     /// Every recorded run so far, as its argument list.
@@ -68,14 +83,11 @@ impl FakeCodex {
 
     /// Wait (up to 5 s) until at least `n` runs are recorded; return them all.
     async fn wait_for_runs(&self, n: usize) -> Vec<Vec<String>> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
+        wait_until(|| {
             let runs = self.runs();
-            if runs.len() >= n || Instant::now() > deadline {
-                return runs;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+            (runs.len() >= n, runs)
+        })
+        .await
     }
 }
 
@@ -138,14 +150,11 @@ fn broker_log(env: &TestEnv) -> String {
 }
 
 async fn wait_for_log(env: &TestEnv, needle: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    wait_until(|| {
         let log = broker_log(env);
-        if log.contains(needle) || Instant::now() > deadline {
-            return log;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+        (log.contains(needle), log)
+    })
+    .await
 }
 
 #[tokio::test]
@@ -170,7 +179,7 @@ async fn a_failing_codex_command_is_logged_and_the_send_still_succeeds() {
 async fn a_missing_codex_command_is_logged_and_the_send_still_succeeds() {
     let mut env = TestEnv::new();
     let missing = env.runtime_dir().join("no-such-codex");
-    env.set_var("PEERPOST_CODEX_COMMAND", missing.to_str().unwrap());
+    env.set_var(CODEX_COMMAND_VAR, missing.to_str().unwrap());
     let codex = env.plain_session().await;
     let claude = env.claude_session(Some("claude")).await;
     let name = codex_call(&codex, THREAD_A, "who", None).await.you();

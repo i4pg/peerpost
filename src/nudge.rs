@@ -1,6 +1,6 @@
 //! The Nudge: wakes an idle Codex Session by running
 //! `<codex command> queue --thread <thread id> --message <fixed line>`
-//! (ADR 0005). The line carries no Peer message text and no sender, only how
+//! (ADR 0005). The line carries no Peer message text and no Sender name, only how
 //! many Peer messages wait; the messages themselves arrive through `read`.
 
 use std::path::PathBuf;
