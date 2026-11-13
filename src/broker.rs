@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::message_log::MessageLog;
+use crate::nudge;
 use crate::private_fs;
 use crate::protocol::{Reply, Request, Response, NAME_TAKEN};
 use crate::settings::Settings;
@@ -26,6 +27,8 @@ struct State {
     log: MessageLog,
     /// Live Sessions by Sender name.
     sessions: HashMap<String, LiveSession>,
+    /// The `codex` program a Nudge runs.
+    codex_command: PathBuf,
 }
 
 struct LiveSession {
@@ -52,6 +55,7 @@ pub async fn run(settings: Settings) -> Result<()> {
     let state = Arc::new(Mutex::new(State {
         log: MessageLog::open(&settings.message_log_path(), settings.log_keep)?,
         sessions: HashMap::new(),
+        codex_command: settings.codex_command.clone(),
     }));
 
     let mut next_conn: ConnId = 0;
@@ -133,6 +137,10 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
         Request::Send { session, recipient, text } => {
             check_owner(state, conn, &session)?;
             let id = state.log.append(&session, &recipient, &text).map_err(|e| format!("{e:#}"))?;
+            if let Some(thread) = state.sessions.get(&recipient).and_then(|live| live.codex_thread.clone()) {
+                // Wake the Codex Session; the send never waits on it.
+                nudge::spawn(state.codex_command.clone(), thread, state.log.unread_count(&recipient));
+            }
             Ok(Reply::Accepted { id })
         }
         Request::Read { session } => {

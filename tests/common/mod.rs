@@ -17,7 +17,8 @@ use tokio::process::Command;
 /// Environment variables a test may set on a spawned peerpost process.
 /// Everything from the outer environment that could change peerpost's
 /// behaviour is removed first, so tests are hermetic.
-const SCRUBBED_VARS: &[&str] = &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_LOG_KEEP"];
+const SCRUBBED_VARS: &[&str] =
+    &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_LOG_KEEP", "PEERPOST_CODEX_COMMAND"];
 
 /// A private runtime and data directory; every Session and Broker started
 /// from one `TestEnv` shares them. Dropping it removes both, which also makes
@@ -58,6 +59,8 @@ impl TestEnv {
         }
         cmd.env("PEERPOST_RUNTIME_DIR", self.runtime_dir());
         cmd.env("PEERPOST_DATA_DIR", self.data_dir());
+        // Never Nudge a real Codex from a test; a test sets a fake instead.
+        cmd.env("PEERPOST_CODEX_COMMAND", "true");
         for (name, value) in &self.vars {
             cmd.env(name, value);
         }

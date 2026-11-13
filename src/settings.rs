@@ -14,6 +14,10 @@ pub const ENV_DATA_DIR: &str = "PEERPOST_DATA_DIR";
 pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
 /// The default for [`ENV_LOG_KEEP`].
 pub const DEFAULT_LOG_KEEP: usize = 10_000;
+/// The `codex` program the Broker runs to Nudge a Codex Session.
+pub const ENV_CODEX_COMMAND: &str = "PEERPOST_CODEX_COMMAND";
+/// The default for [`ENV_CODEX_COMMAND`]: `codex`, found on `PATH`.
+pub const DEFAULT_CODEX_COMMAND: &str = "codex";
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -21,11 +25,18 @@ pub struct Settings {
     pub data_dir: PathBuf,
     /// The Message log keeps only this many newest Peer messages (at least 1).
     pub log_keep: usize,
+    /// The `codex` program a Nudge runs (`<it> queue --thread <id> --message <line>`).
+    pub codex_command: PathBuf,
 }
 
 impl Settings {
     pub fn from_env() -> Result<Self> {
-        Ok(Self { runtime_dir: runtime_dir()?, data_dir: data_dir()?, log_keep: log_keep()? })
+        Ok(Self {
+            runtime_dir: runtime_dir()?,
+            data_dir: data_dir()?,
+            log_keep: log_keep()?,
+            codex_command: env_path(ENV_CODEX_COMMAND).unwrap_or_else(|| DEFAULT_CODEX_COMMAND.into()),
+        })
     }
 
     pub fn socket_path(&self) -> PathBuf {

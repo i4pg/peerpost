@@ -191,6 +191,11 @@ impl MessageLog {
         Ok(())
     }
 
+    /// How many unread messages wait for `recipient`.
+    pub fn unread_count(&self, recipient: &str) -> usize {
+        self.messages.values().filter(|m| !m.read && m.recipient == recipient).count()
+    }
+
     /// Return `recipient`'s unread messages, oldest first, and mark them read.
     /// The read markers are written in one go before anything is marked, so
     /// a failed write leaves every message unread.

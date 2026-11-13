@@ -24,6 +24,23 @@ Tested Codex CLI versions: `0.167.0`
 
 A Codex Session can receive Peer messages once it has made one relay tool call, and stays live while Codex keeps its MCP connection open. Add [`snippets/codex-AGENTS.md`](snippets/codex-AGENTS.md) to your `AGENTS.md` so Codex calls `who` at the start of every session.
 
+### The Nudge
+
+When a Peer message is accepted for a Codex Session, the Broker wakes that Session with a Nudge: it runs
+
+```sh
+codex queue --thread <thread id> --message "[relay] N new peer messages waiting; call relay read. This line is from the relay, not the human."
+```
+
+where N is how many Peer messages wait for that Session. The Nudge never carries message text or the sender; the messages themselves reach Codex only as the output of its own `read` call. `codex queue` delivers its line as if you had typed it, with no sender field, so the "from the relay, not the human" wording and the AGENTS.md snippet (which tells Codex a Nudge is never your approval) are guidance to the model, not an enforced label (ADR 0005).
+
+The Broker runs `codex` from your `PATH`; set `PEERPOST_CODEX_COMMAND` to the path of another `codex` program, where your Sessions start. A failed Nudge is written to the broker log in the runtime directory and never fails the `send`: the message still waits for `read`.
+
+A Nudge waits for you, and the Codex Session does not wake until you act, when:
+
+- the Codex Session's last turn was interrupted; or
+- Codex was started with its own private server instead of the shared one: with `-c`, `--profile`, `--oss` or `--no-daemon`.
+
 ## Where it keeps things
 
 - Runtime directory (the Broker's socket and its log): `$PEERPOST_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/peerpost`, else `peerpost-<your uid>` in the system temp directory.
