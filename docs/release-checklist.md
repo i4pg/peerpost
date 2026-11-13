@@ -6,6 +6,8 @@ Steps marked **(maintainer)** need a maintainer: push access to the GitHub repos
 
 ## First release only: the GitHub repository
 
+- [ ] If the repository will live anywhere other than `i4pg/peerpost`, change the URL in `README.md` (Install), `Cargo.toml` (`repository`) and this file first, and commit.
+- [ ] The work is on `master`: merge the integration branch (`peerpost-v1`) into `master` locally and check the test suite passes there.
 - [ ] **(maintainer)** Create the public repository `i4pg/peerpost`, empty (no README, licence or `.gitignore`; they are in this repo). It must be public: the `ubuntu-22.04-arm` runner the release workflow uses for Linux arm64 is free only for public repositories.
 - [ ] **(maintainer)** In the repository settings, allow GitHub Actions to run. The release workflow needs no secret: it publishes with the built-in `GITHUB_TOKEN` and asks for `contents: write` itself.
 - [ ] **(maintainer)** Add the remote and push the default branch:
@@ -15,13 +17,13 @@ Steps marked **(maintainer)** need a maintainer: push access to the GitHub repos
   git push -u origin master
   ```
 
-- [ ] If the repository lives anywhere else, change the URL in `README.md` (Install) and `Cargo.toml` (`repository`) first.
+- [ ] **(maintainer)** Open a documentation request with OpenAI (github.com/openai/codex issues) asking them to document the `_meta.threadId` field Codex puts on MCP tool calls, linking ADR 0006; note its URL in ADR 0006.
 
 ## Every release
 
 ### Before tagging
 
-- [ ] `version` in `Cargo.toml` is the version being released (the workflow refuses a tag that does not match it), and `Cargo.lock` is updated (`cargo build`).
+- [ ] `version` in `Cargo.toml` is the version being released (the workflow refuses a tag that does not match it), and `Cargo.lock` is updated (`cargo build`); both are committed before anything below.
 - [ ] On the release commit, all pass:
 
   ```sh

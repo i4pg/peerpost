@@ -75,7 +75,7 @@ peerpost is one Rust binary that runs a small local Broker and gives every Sessi
 - Seam 1 (main): the built binary in a temporary runtime and data directory. Tests start MCP server processes as stdio MCP clients would, call `who`, `send` and `read`, run `watch` and `prune`, and assert tool results, errors and printed lines. This one seam covers registration, stamping, addressing, limits, retention, on-demand start, restart survival and file permissions.
 - Codex Sessions are simulated at Seam 1 by an MCP client that puts `_meta.threadId` on its tool calls; a compatibility test pins the field against the supported Codex versions' published schema or source.
 - Seam 2: the `codex` command the Nudge runs is resolved through a setting, so tests point it at a fake script that records its arguments; this checks the Nudge text and when it is sent without a real Codex.
-- No real Claude Code or Codex Session runs in the automated suite. A manual end-to-end check with both products is part of the release checklist in the README.
+- No real Claude Code or Codex Session runs in the automated suite. A manual end-to-end check with both products is part of the release checklist (`docs/release-checklist.md`, linked from the README).
 - Prior art: none in this repo yet (new project). Rust integration tests under the crate's tests directory are the standard home.
 
 ## Out of Scope

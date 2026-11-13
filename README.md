@@ -29,8 +29,8 @@ From a release (Linux and macOS, x86_64 and arm64): download the archive for you
 
 | Computer | Archive |
 |---|---|
-| Linux, x86_64 | `peerpost-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux, arm64 | `peerpost-v<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux, x86_64 (glibc 2.35 or newer) | `peerpost-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, arm64 (glibc 2.35 or newer) | `peerpost-v<version>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS, Intel | `peerpost-v<version>-x86_64-apple-darwin.tar.gz` |
 | macOS, Apple silicon | `peerpost-v<version>-aarch64-apple-darwin.tar.gz` |
 
