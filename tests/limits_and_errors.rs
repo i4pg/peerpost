@@ -109,7 +109,7 @@ async fn both_limits_can_be_set_with_environment_variables() {
 }
 
 #[tokio::test]
-async fn both_limits_can_be_set_in_the_settings_file_in_the_users_config_directory() {
+async fn both_limits_can_be_set_in_the_settings_file_in_the_os_users_config_directory() {
     let env = TestEnv::new();
     env.write_settings_file("max_message_bytes = 5\nmax_unread = 2\n");
     let alice = env.claude_session(Some("alice")).await;

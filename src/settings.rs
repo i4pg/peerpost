@@ -49,8 +49,13 @@ impl Settings {
         Ok(Self {
             runtime_dir: runtime_dir()?,
             data_dir: data_dir()?,
-            max_message_bytes: limit(ENV_MAX_MESSAGE_BYTES, file.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES)?,
-            max_unread: limit(ENV_MAX_UNREAD, file.max_unread, DEFAULT_MAX_UNREAD)?,
+            max_message_bytes: limit(
+                ENV_MAX_MESSAGE_BYTES,
+                "max_message_bytes",
+                file.max_message_bytes,
+                DEFAULT_MAX_MESSAGE_BYTES,
+            )?,
+            max_unread: limit(ENV_MAX_UNREAD, "max_unread", file.max_unread, DEFAULT_MAX_UNREAD)?,
         })
     }
 
@@ -84,26 +89,21 @@ fn read_settings_file(path: &Path) -> Result<SettingsFile> {
     toml::from_str(&text).with_context(|| format!("bad settings file {}", path.display()))
 }
 
-/// A limit: the environment variable `name` if set, else the settings file's
-/// value, else `default`. A limit must be a whole number of at least 1.
-fn limit(name: &str, from_file: Option<usize>, default: usize) -> Result<usize> {
-    if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
-        return match value.trim().parse::<usize>() {
-            Ok(n) if n >= 1 => Ok(n),
-            _ => bail!("{name} must be a whole number of at least 1, not `{value}`"),
-        };
+/// A limit: the environment variable `env_name` if set, else the settings
+/// file's `file_key`, else `default`. A limit must be a whole number of at
+/// least 1.
+fn limit(env_name: &str, file_key: &str, from_file: Option<usize>, default: usize) -> Result<usize> {
+    let (value, source) = match std::env::var(env_name).ok().filter(|v| !v.is_empty()) {
+        Some(text) => (text.trim().parse::<usize>().ok(), format!("{env_name} (`{text}`)")),
+        None => match from_file {
+            Some(n) => (Some(n), format!("`{file_key}` in the settings file")),
+            None => return Ok(default),
+        },
+    };
+    match value {
+        Some(n) if n >= 1 => Ok(n),
+        _ => bail!("{source} must be a whole number of at least 1"),
     }
-    match from_file {
-        Some(0) => bail!("in the settings file, {} must be at least 1", name_in_file(name)),
-        Some(n) => Ok(n),
-        None => Ok(default),
-    }
-}
-
-/// The settings file key for an environment variable (`PEERPOST_MAX_UNREAD`
-/// is `max_unread`).
-fn name_in_file(env_name: &str) -> String {
-    env_name.trim_start_matches("PEERPOST_").to_ascii_lowercase()
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
