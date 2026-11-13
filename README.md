@@ -12,6 +12,8 @@ peerpost is one binary. Claude Code and Codex CLI start it as an MCP server, and
 
 Messages go through a small local Broker that peerpost starts by itself the first time a Session needs it. The Broker stamps every message with the sending Session's registered Sender name; nothing in a tool's arguments or a message's text can set the sender. A peer's words reach a model only as the output of its own `read` call.
 
+Only one Broker runs at a time, even when several Sessions start at once. It stops by itself 30 seconds after the last Session disconnects; change that with `PEERPOST_GRACE_MS` (milliseconds, at least 100), set where your Sessions start. The next Session starts it again. If the Broker stops or crashes while Sessions are open, they reconnect on their next call under the same Sender names; a `send` or `read` cut off mid-call is reported as an error rather than repeated, so no Peer message is sent twice or lost.
+
 A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` (for example `RELAY_NAME=review claude`), otherwise `claude-` plus four random hex digits. Every tool result tells the calling Session its own Sender name.
 
 ## Codex Sessions

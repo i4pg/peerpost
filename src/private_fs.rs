@@ -2,8 +2,10 @@
 //! 0700, files 0600.
 
 use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
@@ -58,6 +60,35 @@ pub fn create_truncate(path: &Path) -> Result<File> {
         .with_context(|| format!("cannot open {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(file)
+}
+
+/// Open `path` (created 0600) and take an exclusive `flock` on it, retrying
+/// for up to `wait`. `None` if another process still holds it. The lock goes
+/// with the returned `File`, and the kernel drops it when its holder dies, so
+/// a crashed holder never leaves a stale lock behind.
+pub fn lock_file(path: &Path, wait: Duration) -> Result<Option<File>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    let deadline = Instant::now() + wait;
+    loop {
+        // SAFETY: flock on a file descriptor this function owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(file));
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(err).with_context(|| format!("cannot lock {}", path.display()));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// The effective uid of this process.

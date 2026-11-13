@@ -5,6 +5,7 @@
 //! one installation.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -17,6 +18,11 @@ pub const ENV_DATA_DIR: &str = "PEERPOST_DATA_DIR";
 pub const ENV_MAX_MESSAGE_BYTES: &str = "PEERPOST_MAX_MESSAGE_BYTES";
 /// Overrides how many unread Peer messages one Recipient may hold.
 pub const ENV_MAX_UNREAD: &str = "PEERPOST_MAX_UNREAD";
+/// How long the Broker keeps running with no client connected, in
+/// milliseconds.
+pub const ENV_GRACE_MS: &str = "PEERPOST_GRACE_MS";
+
+const DEFAULT_GRACE: Duration = Duration::from_secs(30);
 
 /// How many Peer messages the Message log keeps; older ones are dropped.
 pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
@@ -34,6 +40,8 @@ pub struct Settings {
     pub max_message_bytes: usize,
     /// Most unread Peer messages one Recipient may hold.
     pub max_unread: usize,
+    /// The Broker exits once no client has been connected for this long.
+    pub grace: Duration,
     /// The Message log keeps only this many newest Peer messages (at least 1).
     pub log_keep: usize,
 }
@@ -57,6 +65,7 @@ impl Settings {
         Ok(Self {
             runtime_dir: runtime_dir()?,
             data_dir: data_dir()?,
+            grace: grace()?,
             max_message_bytes: limit(
                 ENV_MAX_MESSAGE_BYTES,
                 "max_message_bytes",
@@ -70,6 +79,18 @@ impl Settings {
 
     pub fn socket_path(&self) -> PathBuf {
         self.runtime_dir.join("broker.sock")
+    }
+
+    /// Held (flock) by the running Broker for its whole life: one guards the
+    /// socket, the other the Message log.
+    pub fn broker_lock_paths(&self) -> [PathBuf; 2] {
+        [self.runtime_dir.join("broker.lock"), self.data_dir.join("broker.lock")]
+    }
+
+    /// Held (flock) by a client while it starts a Broker, so clients that
+    /// find no Broker at the same moment start only one.
+    pub fn start_lock_path(&self) -> PathBuf {
+        self.runtime_dir.join("start.lock")
     }
 
     pub fn broker_log_path(&self) -> PathBuf {
@@ -112,6 +133,23 @@ fn limit(env_name: &str, file_key: &str, from_file: Option<usize>, default: usiz
     match value {
         Some(n) if n >= 1 => Ok(n),
         _ => bail!("{source} must be a whole number of at least 1"),
+    }
+}
+
+/// The grace period must outlast a client's own start of the Broker, or the
+/// Broker could stop before the client that started it connects.
+const MIN_GRACE: Duration = Duration::from_millis(100);
+
+fn grace() -> Result<Duration> {
+    let Some(v) = std::env::var(ENV_GRACE_MS).ok().filter(|v| !v.is_empty()) else {
+        return Ok(DEFAULT_GRACE);
+    };
+    match v.parse::<u64>().map(Duration::from_millis) {
+        Ok(grace) if grace >= MIN_GRACE => Ok(grace),
+        _ => bail!(
+            "{ENV_GRACE_MS} must be a whole number of milliseconds, at least {}, got `{v}`",
+            MIN_GRACE.as_millis()
+        ),
     }
 }
 
