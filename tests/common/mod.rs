@@ -27,6 +27,7 @@ const SCRUBBED_VARS: &[&str] = &[
     "PEERPOST_MAX_MESSAGE_BYTES",
     "PEERPOST_MAX_UNREAD",
     "PEERPOST_GRACE_MS",
+    "PEERPOST_CODEX_COMMAND",
 ];
 
 /// A private runtime and data directory; every Session and Broker started
@@ -102,6 +103,8 @@ impl TestEnv {
         cmd.env("PEERPOST_RUNTIME_DIR", self.runtime_dir());
         cmd.env("PEERPOST_DATA_DIR", self.data_dir());
         cmd.env("XDG_CONFIG_HOME", self.config_home());
+        // Never Nudge a real Codex from a test; a test sets a fake instead.
+        cmd.env("PEERPOST_CODEX_COMMAND", "true");
         for (name, value) in &self.vars {
             cmd.env(name, value);
         }

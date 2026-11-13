@@ -31,6 +31,10 @@ pub const ENV_LOG_KEEP: &str = "PEERPOST_LOG_KEEP";
 pub const DEFAULT_LOG_KEEP: usize = 10_000;
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_UNREAD: usize = 100;
+/// The `codex` program the Broker runs to Nudge a Codex Session.
+pub const ENV_CODEX_COMMAND: &str = "PEERPOST_CODEX_COMMAND";
+/// The default for [`ENV_CODEX_COMMAND`]: `codex`, found on `PATH`.
+pub const DEFAULT_CODEX_COMMAND: &str = "codex";
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -44,6 +48,8 @@ pub struct Settings {
     pub grace: Duration,
     /// The Message log keeps only this many newest Peer messages (at least 1).
     pub log_keep: usize,
+    /// The `codex` program a Nudge runs (`<it> queue --thread <id> --message <line>`).
+    pub codex_command: PathBuf,
 }
 
 /// The settings file's keys; every one is optional.
@@ -74,6 +80,7 @@ impl Settings {
             )?,
             max_unread: limit(ENV_MAX_UNREAD, "max_unread", file.max_unread, DEFAULT_MAX_UNREAD)?,
             log_keep: limit(ENV_LOG_KEEP, "log_keep", file.log_keep, DEFAULT_LOG_KEEP)?,
+            codex_command: env_path(ENV_CODEX_COMMAND).unwrap_or_else(|| DEFAULT_CODEX_COMMAND.into()),
         })
     }
 

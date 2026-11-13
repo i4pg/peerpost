@@ -10,6 +10,7 @@ mod broker;
 mod client;
 mod mcp;
 mod message_log;
+mod nudge;
 mod private_fs;
 mod protocol;
 mod settings;
