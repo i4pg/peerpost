@@ -17,18 +17,45 @@ use tokio::process::Command;
 /// Environment variables a test may set on a spawned peerpost process.
 /// Everything from the outer environment that could change peerpost's
 /// behaviour is removed first, so tests are hermetic.
-const SCRUBBED_VARS: &[&str] = &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME"];
+const SCRUBBED_VARS: &[&str] = &["CLAUDECODE", "RELAY_NAME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "PEERPOST_GRACE_MS"];
 
 /// A private runtime and data directory; every Session and Broker started
 /// from one `TestEnv` shares them. Dropping it removes both, which also makes
 /// the Broker exit.
 pub struct TestEnv {
     root: TempDir,
+    /// Extra variables set on every peerpost process this env starts.
+    vars: Vec<(String, String)>,
 }
 
 impl TestEnv {
     pub fn new() -> Self {
-        Self { root: tempfile::Builder::new().prefix("pp").tempdir().expect("tempdir") }
+        Self { root: tempfile::Builder::new().prefix("pp").tempdir().expect("tempdir"), vars: Vec::new() }
+    }
+
+    /// Set `var` on every peerpost process this env starts from now on.
+    pub fn set_env(&mut self, var: &str, value: &str) {
+        self.vars.push((var.to_string(), value.to_string()));
+    }
+
+    /// Process ids of the live Brokers using this env's runtime directory
+    /// (found through `/proc`, so Linux only).
+    pub fn broker_pids(&self) -> Vec<u32> {
+        let wanted = format!("PEERPOST_RUNTIME_DIR={}", self.runtime_dir().display()).into_bytes();
+        let mut pids = Vec::new();
+        for entry in std::fs::read_dir("/proc").expect("/proc").flatten() {
+            let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+            let (Ok(cmdline), Ok(environ)) =
+                (std::fs::read(entry.path().join("cmdline")), std::fs::read(entry.path().join("environ")))
+            else {
+                continue;
+            };
+            let is_broker = cmdline.split(|b| *b == 0).nth(1) == Some(b"broker".as_slice());
+            if is_broker && environ.split(|b| *b == 0).any(|v| v == wanted.as_slice()) {
+                pids.push(pid);
+            }
+        }
+        pids
     }
 
     /// The runtime directory peerpost is told to use (created by peerpost).
@@ -50,6 +77,9 @@ impl TestEnv {
         }
         cmd.env("PEERPOST_RUNTIME_DIR", self.runtime_dir());
         cmd.env("PEERPOST_DATA_DIR", self.data_dir());
+        for (var, value) in &self.vars {
+            cmd.env(var, value);
+        }
         cmd
     }
 

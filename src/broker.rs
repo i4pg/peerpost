@@ -1,12 +1,18 @@
 //! The Broker: one local process per OS user that owns the Unix socket and
 //! the Message log, registers Sessions, stamps Sender names and hands out
 //! Peer messages. The MCP servers (and later the Watcher) are its clients.
+//!
+//! Lifecycle: the Broker holds the Broker lock for its whole life, so only
+//! one runs per runtime directory. It stops when nobody can reach it any more
+//! (its socket file was removed or replaced) or when no client has been
+//! connected for the grace period.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -17,8 +23,13 @@ use crate::private_fs;
 use crate::protocol::{Reply, Request, Response};
 use crate::settings::Settings;
 
-/// How often the Broker checks that its socket file is still in place.
-const SOCKET_CHECK_INTERVAL: Duration = Duration::from_millis(500);
+/// The longest the Broker waits between checks of its socket and its idle
+/// time; shorter when the grace period is shorter.
+const MAX_CHECK_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long a starting Broker waits for the Broker lock. Only a Broker that
+/// is on its way out holds it briefly; a live one holds it for good.
+const LOCK_WAIT: Duration = Duration::from_secs(1);
 
 type ConnId = u64;
 
@@ -26,6 +37,18 @@ struct State {
     log: MessageLog,
     /// Live Sessions: Sender name -> the connection that registered it.
     sessions: HashMap<String, ConnId>,
+    /// Open client connections.
+    clients: usize,
+    /// When the last client left (or the Broker started, if none came yet).
+    idle_since: Instant,
+}
+
+/// Why a running Broker stops.
+enum Stop {
+    /// Its socket file was removed or replaced: no new client can reach it.
+    Unreachable,
+    /// No client has been connected for the grace period.
+    Idle,
 }
 
 pub async fn run(settings: Settings) -> Result<()> {
@@ -33,25 +56,35 @@ pub async fn run(settings: Settings) -> Result<()> {
     private_fs::ensure_dir(&settings.data_dir)?;
     let socket = settings.socket_path();
 
-    if UnixStream::connect(&socket).await.is_ok() {
-        // Another Broker already answers; there must be only one.
+    // The Broker lock makes this the only Broker: whoever holds it owns the
+    // socket. A crashed Broker's lock is released by the kernel, so only its
+    // socket file can be left behind, and that is removed below.
+    let Some(mut lock) = private_fs::lock_file(&settings.broker_lock_path(), LOCK_WAIT)? else {
         return Ok(());
-    }
+    };
+    lock.set_len(0)?;
+    writeln!(lock, "{}", std::process::id())?;
+
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).with_context(|| format!("cannot bind {}", socket.display()))?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     let socket_ino = std::fs::metadata(&socket)?.ino();
 
-    let state =
-        Arc::new(Mutex::new(State { log: MessageLog::open(&settings.message_log_path())?, sessions: HashMap::new() }));
+    let state = Arc::new(Mutex::new(State {
+        log: MessageLog::open(&settings.message_log_path())?,
+        sessions: HashMap::new(),
+        clients: 0,
+        idle_since: Instant::now(),
+    }));
 
     let mut next_conn: ConnId = 0;
-    let mut check = tokio::time::interval(SOCKET_CHECK_INTERVAL);
-    loop {
+    let mut check = tokio::time::interval((settings.grace / 2).clamp(Duration::from_millis(10), MAX_CHECK_INTERVAL));
+    let stop = loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     next_conn += 1;
+                    state.lock().expect("broker state poisoned").clients += 1;
                     tokio::spawn(serve_connection(stream, next_conn, state.clone()));
                 }
                 // A passing failure (such as running out of file
@@ -63,13 +96,25 @@ pub async fn run(settings: Settings) -> Result<()> {
             },
             _ = check.tick() => {
                 if !still_owns_socket(&socket, socket_ino) {
-                    // The socket was removed or replaced: nobody can reach
-                    // this Broker any more, so it stops.
-                    return Ok(());
+                    break Stop::Unreachable;
+                }
+                let state = state.lock().expect("broker state poisoned");
+                if state.clients == 0 && state.idle_since.elapsed() >= settings.grace {
+                    break Stop::Idle;
                 }
             }
         }
+    };
+    if let Stop::Idle = stop {
+        // Remove the socket while still holding the lock, so the next client
+        // finds no socket and starts a fresh Broker, which takes the lock
+        // once this one has exited. A client that connected just now sees its
+        // connection close and reconnects to that fresh Broker.
+        let _ = std::fs::remove_file(&socket);
     }
+    drop(listener);
+    drop(lock);
+    Ok(())
 }
 
 fn still_owns_socket(socket: &Path, ino: u64) -> bool {
@@ -92,6 +137,10 @@ async fn serve_connection(stream: UnixStream, conn: ConnId, state: Arc<Mutex<Sta
     }
     let mut state = state.lock().expect("broker state poisoned");
     state.sessions.retain(|_, owner| *owner != conn);
+    state.clients -= 1;
+    if state.clients == 0 {
+        state.idle_since = Instant::now();
+    }
 }
 
 fn handle(state: &mut State, conn: ConnId, request: Request) -> Response {
