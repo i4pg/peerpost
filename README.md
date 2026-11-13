@@ -21,7 +21,7 @@ A Claude Session is named by `RELAY_NAME` if you set it when you start `claude` 
 - **Same computer only.** Sessions talk through a local socket; Sessions on different computers cannot reach each other.
 - **Linux and macOS only.** There is no Windows build, and peerpost does not run on Windows.
 - **The trust boundary is your OS user.** Anything already running as your OS user can read the Message log and pretend to be any Session (see [Trust boundary](#trust-boundary)).
-- **No endless-loop guard in this release.** Two agents allowed to `send` without asking can keep answering each other for as long as you let them. What stops a loop is the default setup below, where every `send` asks you first.
+- **No endless-loop guard in this release.** Two Sessions allowed to `send` without asking can keep answering each other for as long as you let them. What stops a loop is the default setup below, where every `send` asks you first.
 
 ## Install
 
@@ -29,15 +29,15 @@ From a release (Linux and macOS, x86_64 and arm64): download the archive for you
 
 | Computer | Archive |
 |---|---|
-| Linux, x86_64 | `peerpost-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux, arm64 | `peerpost-<version>-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS, Intel | `peerpost-<version>-x86_64-apple-darwin.tar.gz` |
-| macOS, Apple silicon | `peerpost-<version>-aarch64-apple-darwin.tar.gz` |
+| Linux, x86_64 | `peerpost-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, arm64 | `peerpost-v<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS, Intel | `peerpost-v<version>-x86_64-apple-darwin.tar.gz` |
+| macOS, Apple silicon | `peerpost-v<version>-aarch64-apple-darwin.tar.gz` |
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing      # macOS: shasum -a 256 -c SHA256SUMS --ignore-missing
-tar -xzf peerpost-<version>-<target>.tar.gz
-install -m 755 peerpost-<version>-<target>/peerpost ~/.local/bin/   # any directory on your PATH
+tar -xzf peerpost-v<version>-<target>.tar.gz
+mkdir -p ~/.local/bin && install -m 755 peerpost-v<version>-<target>/peerpost ~/.local/bin/   # any directory on your PATH
 peerpost --version
 ```
 
@@ -70,7 +70,7 @@ Then add the shipped instruction snippets: [`snippets/codex-AGENTS.md`](snippets
 
 ### Permissions
 
-The recommended setup lets `read` and `who` run without asking, while `send` asks you every time, so no agent messages another without your OK.
+The recommended setup lets `read` and `who` run without asking, while `send` asks you every time, so no Session messages another without your OK.
 
 Codex CLI, in `~/.codex/config.toml`, below the `[mcp_servers.peerpost]` table that `codex mcp add` wrote:
 
@@ -85,7 +85,7 @@ approval_mode = "approve"
 approval_mode = "prompt"
 ```
 
-Claude Code, in `~/.claude/settings.json` (Claude Code asks before any MCP tool not allowed here, so `send` asks):
+Claude Code, in `~/.claude/settings.json` (in its default permission mode Claude Code asks before any MCP tool not allowed here, so `send` asks; a mode that skips permission prompts skips this one too):
 
 ```json
 {
@@ -102,12 +102,10 @@ To let `send` run without asking (read [Before you install](#before-you-install)
 
 ### Environment variables and Codex
 
-Codex CLI starts MCP servers with only a few environment variables (such as `HOME`, `PATH` and `TMPDIR`), so a `PEERPOST_*` or `XDG_*` variable set in your shell does not reach a Codex Session's peerpost. Put settings in the [settings file](#settings) instead, which every Session reads. If you need an environment variable there too, forward it by name in `~/.codex/config.toml`:
+Codex CLI starts MCP servers with only a few environment variables (such as `HOME`, `PATH` and `TMPDIR`), so a `PEERPOST_*` or `XDG_*` variable set in your shell does not reach a Codex Session's peerpost. Put settings in the [settings file](#settings) instead, which every Session reads. If you need an environment variable there too, forward it by name: in `~/.codex/config.toml`, add an `env_vars` line inside the `[mcp_servers.peerpost]` table that `codex mcp add` wrote (do not add a second table), for example:
 
 ```toml
-[mcp_servers.peerpost]
-command = "peerpost"
-env_vars = ["PEERPOST_GRACE_MS", "XDG_RUNTIME_DIR"]
+env_vars = ["PEERPOST_RUNTIME_DIR", "XDG_RUNTIME_DIR"]
 ```
 
 Forward `XDG_RUNTIME_DIR`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME` if you set them to anything but the usual places, so Codex and Claude Sessions find the same Broker, Message log and settings file.
@@ -214,7 +212,7 @@ Only processes running as your OS user can reach the Broker: its socket and Mess
 
 ## Releasing
 
-Pushing a tag such as `v0.1.0` runs [`.github/workflows/release.yml`](.github/workflows/release.yml): it runs the full test suite, builds the four binaries above, and publishes them with SHA-256 checksums as a GitHub release. The steps for cutting a release, including a hands-on check with a real Claude Code Session and a real Codex Session messaging each other both ways, are in the [release checklist](docs/release-checklist.md).
+Pushing a tag such as `v0.1.0` runs [`.github/workflows/release.yml`](.github/workflows/release.yml): it runs the test suite on Linux (x86_64 and arm64), builds the four binaries above, and publishes them with SHA-256 checksums as a GitHub release. The steps for cutting a release, including a hands-on check with a real Claude Code Session and a real Codex Session messaging each other both ways, are in the [release checklist](docs/release-checklist.md).
 
 ## Licence
 

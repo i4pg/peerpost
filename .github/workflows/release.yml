@@ -1,6 +1,9 @@
-# Release: push a tag such as v0.1.0 and this builds peerpost for Linux and
-# macOS (x86_64 and arm64), runs the test suite first, and publishes a GitHub
-# release with one archive per target plus SHA-256 checksums.
+# Release: push a tag such as v0.1.0 and this runs the test suite on Linux
+# x86_64, builds peerpost for Linux and macOS (x86_64 and arm64), runs the
+# suite again on Linux arm64 and the built binary on macOS arm64, and
+# publishes a GitHub release with one archive per target plus SHA-256
+# checksums. The suite's harness is Linux-only (it reads /proc), so macOS is
+# checked by hand (docs/release-checklist.md, hands-on check).
 # Steps for the person cutting a release: docs/release-checklist.md.
 name: release
 
@@ -53,6 +56,14 @@ jobs:
         run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Test natively (Linux)
+        if: runner.os == 'Linux'
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Run the built binary (macOS arm64; x86_64 is cross-built here)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          "target/${{ matrix.target }}/release/peerpost" --version
+          "target/${{ matrix.target }}/release/peerpost" --help
       - name: Package
         shell: bash
         run: |
