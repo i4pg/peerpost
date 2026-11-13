@@ -24,8 +24,16 @@ type ConnId = u64;
 
 struct State {
     log: MessageLog,
-    /// Live Sessions: Sender name -> the connection that registered it.
-    sessions: HashMap<String, ConnId>,
+    /// Live Sessions by Sender name.
+    sessions: HashMap<String, LiveSession>,
+}
+
+struct LiveSession {
+    /// The connection that registered it; it may act only for its own.
+    conn: ConnId,
+    /// A Codex Session's thread id (ADR 0006), for `codex queue --thread`.
+    #[allow(dead_code)] // read by the Nudge (ticket 07)
+    codex_thread: Option<String>,
 }
 
 pub async fn run(settings: Settings) -> Result<()> {
@@ -91,7 +99,7 @@ async fn serve_connection(stream: UnixStream, conn: ConnId, state: Arc<Mutex<Sta
         }
     }
     let mut state = state.lock().expect("broker state poisoned");
-    state.sessions.retain(|_, owner| *owner != conn);
+    state.sessions.retain(|_, live| live.conn != conn);
 }
 
 fn handle(state: &mut State, conn: ConnId, request: Request) -> Response {
@@ -103,11 +111,11 @@ fn handle(state: &mut State, conn: ConnId, request: Request) -> Response {
 
 fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Reply, String> {
     match request {
-        Request::Register { session } => {
+        Request::Register { session, codex_thread } => {
             if state.sessions.contains_key(&session) {
                 return Err(format!("the Sender name `{session}` is already used by a live Session"));
             }
-            state.sessions.insert(session, conn);
+            state.sessions.insert(session, LiveSession { conn, codex_thread });
             Ok(Reply::Registered)
         }
         Request::Who => {
@@ -131,7 +139,7 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
 /// A connection may only act for Sessions it registered itself.
 fn check_owner(state: &State, conn: ConnId, session: &str) -> Result<(), String> {
     match state.sessions.get(session) {
-        Some(owner) if *owner == conn => Ok(()),
+        Some(live) if live.conn == conn => Ok(()),
         _ => Err(format!("`{session}` is not a Session registered on this connection")),
     }
 }
