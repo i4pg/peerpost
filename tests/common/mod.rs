@@ -245,3 +245,77 @@ pub fn mode(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
 }
+
+impl TestEnv {
+    /// Whether a Broker answers on this env's socket right now.
+    pub async fn broker_answers(&self) -> bool {
+        tokio::net::UnixStream::connect(self.runtime_dir().join("broker.sock")).await.is_ok()
+    }
+
+    /// Wait up to 5 s for a Broker to answer; panics if none does.
+    pub async fn wait_for_broker(&self) {
+        for _ in 0..200 {
+            if self.broker_answers().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("no Broker answered");
+    }
+
+    /// Start `peerpost watch <name>` as Claude Code's Monitor tool would, with
+    /// its stdout captured line by line.
+    pub fn watch(&self, name: &str) -> Watcher {
+        let mut cmd = self.command();
+        cmd.args(["watch", name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().expect("spawn peerpost watch");
+        let stdout = child.stdout.take().expect("watch stdout");
+        let lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        Watcher { child, lines }
+    }
+}
+
+/// A running `peerpost watch`.
+pub struct Watcher {
+    child: tokio::process::Child,
+    lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+}
+
+impl Watcher {
+    /// The next line the Watcher prints; panics if none comes within 10 s.
+    pub async fn next_line(&mut self) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(10), self.lines.next_line())
+            .await
+            .expect("the Watcher printed no line within 10 s")
+            .expect("read watch stdout")
+            .expect("the Watcher ended without printing a line")
+    }
+
+    /// Panics if the Watcher prints a line within `ms` milliseconds.
+    pub async fn assert_quiet_for(&mut self, ms: u64) {
+        if let Ok(line) = tokio::time::timeout(std::time::Duration::from_millis(ms), self.lines.next_line()).await {
+            panic!("the Watcher should stay quiet, but printed {line:?}");
+        }
+    }
+
+    /// Send `signal` (such as `libc::SIGTERM`) and wait for the Watcher to
+    /// end; returns its exit status and whatever it printed after the
+    /// last line read.
+    pub async fn stop_with(mut self, signal: i32) -> (std::process::ExitStatus, Vec<String>) {
+        let pid = self.child.id().expect("watcher still running") as i32;
+        // SAFETY: plain kill(2) on a child this test owns.
+        unsafe { libc::kill(pid, signal) };
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), self.child.wait())
+            .await
+            .expect("the Watcher did not stop within 10 s")
+            .expect("wait for watcher");
+        let mut rest = Vec::new();
+        while let Ok(Some(line)) = self.lines.next_line().await {
+            rest.push(line);
+        }
+        (status, rest)
+    }
+}

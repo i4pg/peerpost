@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::private_fs;
-use crate::protocol::PeerMessage;
+use crate::protocol::{PeerMessage, UnreadCount};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -211,6 +211,23 @@ impl MessageLog {
                 stored.message.clone()
             })
             .collect())
+    }
+
+    /// How many unread messages wait for `recipient`, per Sender name, in
+    /// the order each sender's oldest unread message arrived.
+    pub fn unread_counts(&self, recipient: &str) -> Vec<UnreadCount> {
+        let mut counts: Vec<UnreadCount> = Vec::new();
+        for stored in self.messages.values().filter(|m| !m.read && m.recipient == recipient) {
+            let id = stored.message.id;
+            match counts.iter_mut().find(|c| c.sender == stored.message.sender) {
+                Some(c) => {
+                    c.count += 1;
+                    c.newest_id = id;
+                }
+                None => counts.push(UnreadCount { sender: stored.message.sender.clone(), count: 1, newest_id: id }),
+            }
+        }
+        counts
     }
 
     fn write(&mut self, records: &[Record]) -> Result<()> {

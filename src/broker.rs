@@ -1,6 +1,6 @@
 //! The Broker: one local process per OS user that owns the Unix socket and
 //! the Message log, registers Sessions, stamps Sender names and hands out
-//! Peer messages. The MCP servers (and later the Watcher) are its clients.
+//! Peer messages. The MCP servers and Watchers are its clients.
 //!
 //! Lifecycle: the Broker holds a lock file in the runtime directory and one
 //! in the data directory for its whole life, so only one runs per socket and
@@ -244,6 +244,7 @@ fn handle_inner(state: &mut State, conn: ConnId, request: Request) -> Result<Rep
             let removed = state.log.clear().map_err(|e| format!("{e:#}"))?;
             Ok(Reply::Pruned { removed })
         }
+        Request::Unread { recipient } => Ok(Reply::Unread(state.log.unread_counts(&recipient))),
     }
 }
 
