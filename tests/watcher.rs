@@ -71,17 +71,22 @@ async fn the_watcher_starts_the_broker_and_reports_messages_already_waiting() {
     bob.close().await;
     let mut broker = broker;
     broker.kill().await.expect("kill broker");
+    assert!(!env.broker_answers().await, "the old Broker is gone");
 
     // No Broker runs now; the Watcher starts one, which replays the log.
     let mut watcher = env.watch("bob");
+    env.wait_for_broker().await;
     assert_eq!(watcher.next_line().await, "1 new message from alice, call read");
 }
 
 #[tokio::test]
 async fn the_watcher_exits_cleanly_when_stopped() {
-    for signal in [libc::SIGTERM, libc::SIGINT] {
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
         let env = TestEnv::new();
         let mut watcher = env.watch("bob");
+        // The Watcher handles signals before it starts the Broker, so once a
+        // Broker answers, a signal is a clean stop.
+        env.wait_for_broker().await;
         watcher.assert_quiet_for(300).await;
         let (status, rest) = watcher.stop_with(signal).await;
         assert!(status.success(), "signal {signal}: {status}");
@@ -107,4 +112,22 @@ async fn watch_without_a_sender_name_fails_with_usage() {
     let out = env.run(&["watch"]).await;
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("peerpost watch <sender-name>"));
+}
+
+#[tokio::test]
+async fn a_new_message_right_after_a_read_still_wakes_the_session_even_if_the_count_is_the_same() {
+    let env = TestEnv::new();
+    let alice = env.claude_session(Some("alice")).await;
+    let bob = env.claude_session(Some("bob")).await;
+    let mut watcher = env.watch("bob");
+
+    alice.send("bob", "m0").await.ok();
+    assert_eq!(watcher.next_line().await, "1 new message from alice, call read");
+    for n in 1..=5 {
+        // Read and send back to back, faster than the Watcher looks: the
+        // count is 1 before and after, but a new message waits.
+        bob.read().await.ok();
+        alice.send("bob", &format!("m{n}")).await.ok();
+        assert_eq!(watcher.next_line().await, "1 new message from alice, call read", "round {n}");
+    }
 }

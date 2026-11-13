@@ -49,11 +49,13 @@ pub enum Reply {
 }
 
 /// How many unread Peer messages one Sender name has waiting for a
-/// Recipient. Carries no text.
+/// Recipient, and the id of the newest (so a message read and replaced by a
+/// new one between two looks still shows as a change). Carries no text.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnreadCount {
     pub sender: String,
     pub count: usize,
+    pub newest_id: u64,
 }
 
 /// A Peer message as handed to its Recipient.

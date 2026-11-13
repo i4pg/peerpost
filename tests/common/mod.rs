@@ -203,6 +203,22 @@ pub fn mode(path: &Path) -> u32 {
 }
 
 impl TestEnv {
+    /// Whether a Broker answers on this env's socket right now.
+    pub async fn broker_answers(&self) -> bool {
+        tokio::net::UnixStream::connect(self.runtime_dir().join("broker.sock")).await.is_ok()
+    }
+
+    /// Wait up to 5 s for a Broker to answer; panics if none does.
+    pub async fn wait_for_broker(&self) {
+        for _ in 0..200 {
+            if self.broker_answers().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("no Broker answered");
+    }
+
     /// Start `peerpost watch <name>` as Claude Code's Monitor tool would, with
     /// its stdout captured line by line.
     pub fn watch(&self, name: &str) -> Watcher {

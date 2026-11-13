@@ -213,9 +213,13 @@ impl MessageLog {
     pub fn unread_counts(&self, recipient: &str) -> Vec<UnreadCount> {
         let mut counts: Vec<UnreadCount> = Vec::new();
         for stored in self.messages.values().filter(|m| !m.read && m.recipient == recipient) {
+            let id = stored.message.id;
             match counts.iter_mut().find(|c| c.sender == stored.message.sender) {
-                Some(c) => c.count += 1,
-                None => counts.push(UnreadCount { sender: stored.message.sender.clone(), count: 1 }),
+                Some(c) => {
+                    c.count += 1;
+                    c.newest_id = id;
+                }
+                None => counts.push(UnreadCount { sender: stored.message.sender.clone(), count: 1, newest_id: id }),
             }
         }
         counts
